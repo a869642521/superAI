@@ -1,0 +1,32 @@
+# ─── Flutter / Dart ───────────────────────────────────────────────
+app/.dart_tool/
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/pubspec.lock
+
+# ─── Node / NestJS ───────────────────────────────────────────────
+server/node_modules/
+server/dist/
+server/.env
+server/prisma/migrations/*/migration_lock.toml
+
+# ─── Python / FastAPI ────────────────────────────────────────────
+server/services/ai-service/.venv/
+server/services/ai-service/__pycache__/
+server/services/ai-service/app/**/__pycache__/
+server/services/ai-service/*.pyc
+server/services/ai-service/.env
+
+# ─── macOS ───────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ─── IDE ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+
+# ─── Docker ──────────────────────────────────────────────────────
+docker-compose.override.yml

@@ -1,0 +1,113 @@
+import 'package:equatable/equatable.dart';
+
+enum CardType { textImage, dialogue, agentProfile }
+
+class ContentCardModel extends Equatable {
+  final String id;
+  final String userId;
+  final String? agentId;
+  final CardType type;
+  final String title;
+  final String content;
+  final List<String> imageUrls;
+  final int likeCount;
+  final int commentCount;
+  final DateTime createdAt;
+  final UserBrief user;
+  final AgentCardBrief? agent;
+
+  const ContentCardModel({
+    required this.id,
+    required this.userId,
+    this.agentId,
+    required this.type,
+    required this.title,
+    required this.content,
+    required this.imageUrls,
+    required this.likeCount,
+    required this.commentCount,
+    required this.createdAt,
+    required this.user,
+    this.agent,
+  });
+
+  factory ContentCardModel.fromJson(Map<String, dynamic> json) {
+    return ContentCardModel(
+      id: json['id'] as String,
+      userId: json['userId'] as String,
+      agentId: json['agentId'] as String?,
+      type: _parseCardType(json['type'] as String),
+      title: json['title'] as String? ?? '',
+      content: json['content'] as String,
+      imageUrls: (json['imageUrls'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      likeCount: json['likeCount'] as int? ?? 0,
+      commentCount: json['commentCount'] as int? ?? 0,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      user: UserBrief.fromJson(json['user'] as Map<String, dynamic>),
+      agent: json['agent'] != null
+          ? AgentCardBrief.fromJson(json['agent'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
+  static CardType _parseCardType(String type) {
+    switch (type) {
+      case 'TEXT_IMAGE':
+        return CardType.textImage;
+      case 'DIALOGUE':
+        return CardType.dialogue;
+      case 'AGENT_PROFILE':
+        return CardType.agentProfile;
+      default:
+        return CardType.textImage;
+    }
+  }
+
+  @override
+  List<Object?> get props => [id];
+}
+
+class UserBrief {
+  final String id;
+  final String nickname;
+  final String? avatarUrl;
+
+  const UserBrief({required this.id, required this.nickname, this.avatarUrl});
+
+  factory UserBrief.fromJson(Map<String, dynamic> json) {
+    return UserBrief(
+      id: json['id'] as String,
+      nickname: json['nickname'] as String? ?? '',
+      avatarUrl: json['avatarUrl'] as String?,
+    );
+  }
+}
+
+class AgentCardBrief {
+  final String id;
+  final String name;
+  final String emoji;
+  final String gradientStart;
+  final String gradientEnd;
+
+  const AgentCardBrief({
+    required this.id,
+    required this.name,
+    required this.emoji,
+    required this.gradientStart,
+    required this.gradientEnd,
+  });
+
+  factory AgentCardBrief.fromJson(Map<String, dynamic> json) {
+    return AgentCardBrief(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      emoji: json['emoji'] as String? ?? '🤖',
+      gradientStart: json['gradientStart'] as String? ?? '#6C63FF',
+      gradientEnd: json['gradientEnd'] as String? ?? '#00D2FF',
+    );
+  }
+}
