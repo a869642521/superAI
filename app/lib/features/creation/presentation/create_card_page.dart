@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
+import 'package:starpath/features/discovery/data/content_providers.dart';
 import 'package:starpath/shared/widgets/gradient_button.dart';
 
-class CreateCardPage extends StatefulWidget {
+class CreateCardPage extends ConsumerStatefulWidget {
   const CreateCardPage({super.key});
 
   @override
-  State<CreateCardPage> createState() => _CreateCardPageState();
+  ConsumerState<CreateCardPage> createState() => _CreateCardPageState();
 }
 
-class _CreateCardPageState extends State<CreateCardPage> {
+class _CreateCardPageState extends ConsumerState<CreateCardPage> {
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   String _selectedType = 'TEXT_IMAGE';
@@ -22,8 +25,9 @@ class _CreateCardPageState extends State<CreateCardPage> {
     super.dispose();
   }
 
-  void _publish() async {
-    if (_titleController.text.isEmpty || _contentController.text.isEmpty) {
+  Future<void> _publish() async {
+    if (_titleController.text.trim().isEmpty ||
+        _contentController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请填写标题和内容')),
       );
@@ -32,30 +36,51 @@ class _CreateCardPageState extends State<CreateCardPage> {
 
     setState(() => _isPublishing = true);
 
-    // TODO: Call API to create card
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (mounted) {
-      setState(() => _isPublishing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              ShaderMask(
-                shaderCallback: (bounds) =>
-                    StarpathColors.currencyGradient.createShader(bounds),
-                child: const Icon(Icons.auto_awesome,
-                    color: Colors.white, size: 18),
-              ),
-              const SizedBox(width: 8),
-              const Text('发布成功！获得 10 灵感币'),
-            ],
-          ),
-          backgroundColor: StarpathColors.success,
-        ),
+    try {
+      final repo = ref.read(contentRepositoryProvider);
+      final card = await repo.createCard(
+        type: _selectedType,
+        title: _titleController.text.trim(),
+        content: _contentController.text.trim(),
       );
-      _titleController.clear();
-      _contentController.clear();
+
+      // Refresh feed and prepend the new card immediately
+      ref.read(feedProvider.notifier).prependCard(card);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                ShaderMask(
+                  shaderCallback: (bounds) =>
+                      StarpathColors.currencyGradient.createShader(bounds),
+                  child: const Icon(Icons.auto_awesome,
+                      color: Colors.white, size: 18),
+                ),
+                const SizedBox(width: 8),
+                const Text('发布成功！获得 10 灵感币'),
+              ],
+            ),
+            backgroundColor: StarpathColors.success,
+          ),
+        );
+        _titleController.clear();
+        _contentController.clear();
+        // Navigate back to home feed
+        context.go('/discovery');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('发布失败：$e'),
+            backgroundColor: StarpathColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPublishing = false);
     }
   }
 
@@ -190,10 +215,12 @@ class _CreateCardPageState extends State<CreateCardPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           gradient: isSelected ? StarpathColors.brandGradient : null,
-          color: isSelected ? null : Colors.white,
+          color: isSelected ? null : StarpathColors.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? Colors.transparent : StarpathColors.divider,
+            color: isSelected
+                ? Colors.transparent
+                : StarpathColors.outlineVariant,
           ),
         ),
         child: Row(
@@ -201,14 +228,17 @@ class _CreateCardPageState extends State<CreateCardPage> {
           children: [
             Icon(icon,
                 size: 18,
-                color: isSelected ? Colors.white : StarpathColors.textSecondary),
+                color: isSelected
+                    ? Colors.white
+                    : StarpathColors.onSurfaceVariant),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
                 color:
-                    isSelected ? Colors.white : StarpathColors.textPrimary,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    isSelected ? Colors.white : StarpathColors.onSurface,
+                fontWeight:
+                    isSelected ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ],

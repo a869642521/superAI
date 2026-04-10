@@ -15,6 +15,7 @@ class ContentCardModel extends Equatable {
   final DateTime createdAt;
   final UserBrief user;
   final AgentCardBrief? agent;
+  final bool isLiked;
 
   const ContentCardModel({
     required this.id,
@@ -29,6 +30,7 @@ class ContentCardModel extends Equatable {
     required this.createdAt,
     required this.user,
     this.agent,
+    this.isLiked = false,
   });
 
   factory ContentCardModel.fromJson(Map<String, dynamic> json) {
@@ -50,6 +52,7 @@ class ContentCardModel extends Equatable {
       agent: json['agent'] != null
           ? AgentCardBrief.fromJson(json['agent'] as Map<String, dynamic>)
           : null,
+      isLiked: json['isLiked'] as bool? ?? false,
     );
   }
 
@@ -110,4 +113,38 @@ class AgentCardBrief {
       gradientEnd: json['gradientEnd'] as String? ?? '#00D2FF',
     );
   }
+}
+
+// ── Comment Model ─────────────────────────────────────────────────────────────
+
+class CommentModel {
+  final String id;
+  final String content;
+  final DateTime createdAt;
+  final UserBrief user;
+
+  const CommentModel({
+    required this.id,
+    required this.content,
+    required this.createdAt,
+    required this.user,
+  });
+
+  factory CommentModel.fromJson(Map<String, dynamic> json) {
+    return CommentModel(
+      id: json['id'] as String,
+      content: json['content'] as String,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      user: UserBrief.fromJson(json['user'] as Map<String, dynamic>),
+    );
+  }
+}
+
+// ── Feed Result (paginated) ───────────────────────────────────────────────────
+
+class FeedResult {
+  final List<ContentCardModel> items;
+  final String? nextCursor;
+
+  const FeedResult({required this.items, this.nextCursor});
 }

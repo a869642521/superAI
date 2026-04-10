@@ -11,7 +11,9 @@ void main() {
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.light,
   ));
 
   runApp(const ProviderScope(child: StarpathApp()));
@@ -38,37 +40,56 @@ class _StarpathAppState extends ConsumerState<StarpathApp> {
     final app = MaterialApp.router(
       title: 'Starpath',
       debugShowCheckedModeBanner: false,
-      theme: StarpathTheme.lightTheme,
+      theme: StarpathTheme.darkTheme,
       routerConfig: router,
     );
 
     if (kIsWeb) {
+      const outerBg = Color(0xFFFAFAFA); // App 外：浅白底
       return MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'Starpath',
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: outerBg,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFFCC97FF),
+            brightness: Brightness.light,
+          ),
+        ),
         home: Scaffold(
-          backgroundColor: const Color(0xFF1A1D26),
+          backgroundColor: outerBg,
           body: Center(
-            child: AspectRatio(
-              aspectRatio: 9 / 19.5,
-              child: Container(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: AspectRatio(
+                aspectRatio: 9 / 19.5,
+                child: Container(
                 constraints: const BoxConstraints(maxHeight: 844),
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(32),
+                  borderRadius: BorderRadius.circular(8),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
-                      blurRadius: 40,
-                      spreadRadius: 2,
+                      color: const Color(0xFFCC97FF).withValues(alpha: 0.12),
+                      blurRadius: 32,
+                      spreadRadius: -2,
+                      offset: const Offset(0, 8),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 24,
+                      offset: const Offset(0, 4),
                     ),
                   ],
                 ),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(32),
+                  borderRadius: BorderRadius.circular(8),
                   child: app,
                 ),
               ),
+            ),
             ),
           ),
         ),

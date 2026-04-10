@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,7 +8,7 @@ import 'package:starpath/features/chat/data/chat_providers.dart';
 import 'package:starpath/features/chat/domain/chat_model.dart';
 import 'package:starpath/shared/widgets/aura_avatar.dart';
 
-Color _hexToColor(String hex) {
+Color _hexColor(String hex) {
   hex = hex.replaceFirst('#', '');
   return Color(int.parse('FF$hex', radix: 16));
 }
@@ -29,32 +30,29 @@ class ChatListPage extends ConsumerWidget {
     final conversationsAsync = ref.watch(conversationsProvider);
 
     return Scaffold(
-      backgroundColor: StarpathColors.background,
+      backgroundColor: StarpathColors.surface,
       appBar: AppBar(title: const Text('对话')),
       body: conversationsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const Center(
+          child: CircularProgressIndicator(color: StarpathColors.primary),
+        ),
         error: (_, __) => _buildEmptyState(context),
         data: (conversations) => conversations.isEmpty
             ? _buildEmptyState(context)
-            : _buildList(context, ref, conversations),
+            : _buildList(context, conversations),
       ),
     );
   }
 
   Widget _buildList(
-      BuildContext context, WidgetRef ref, List<ConversationModel> conversations) {
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      BuildContext context, List<ConversationModel> conversations) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
       itemCount: conversations.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        indent: 80,
-        color: StarpathColors.divider,
+      itemBuilder: (context, i) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: _ConversationTile(conversation: conversations[i]),
       ),
-      itemBuilder: (context, index) {
-        final conv = conversations[index];
-        return _ConversationTile(conversation: conv);
-      },
     );
   }
 
@@ -63,27 +61,45 @@ class ChatListPage extends ConsumerWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.chat_bubble_outline,
-              size: 64,
-              color: StarpathColors.textTertiary.withValues(alpha: 0.5)),
-          const SizedBox(height: 16),
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: StarpathColors.surfaceContainerHigh,
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: StarpathColors.outlineVariant, width: 1),
+            ),
+            child: const Icon(Icons.chat_bubble_outline_rounded,
+                size: 36, color: StarpathColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 20),
           Text('还没有对话',
               style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 8),
-          Text('先去创建一个AI伙伴再开始聊天',
-              style: Theme.of(context).textTheme.bodyMedium),
-          const SizedBox(height: 24),
-          TextButton(
-            onPressed: () => context.go('/agents'),
-            child: ShaderMask(
-              shaderCallback: (bounds) =>
-                  StarpathColors.brandGradient.createShader(bounds),
-              child: const Text(
+          Text(
+            '先去创建一个AI伙伴再开始聊天',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 28),
+          GestureDetector(
+            onTap: () => context.go('/agents'),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 24, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(
+                    color: StarpathColors.primary.withValues(alpha: 0.5),
+                    width: 1.5),
+                borderRadius: BorderRadius.circular(100),
+              ),
+              child: Text(
                 '去创建伙伴 →',
                 style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: StarpathColors.primary,
+                ),
               ),
             ),
           ),
@@ -100,54 +116,74 @@ class _ConversationTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final agent = conversation.agent;
-    final gradStart = _hexToColor(agent.gradientStart);
-    final gradEnd = _hexToColor(agent.gradientEnd);
+    final gradStart = _hexColor(agent.gradientStart);
+    final gradEnd = _hexColor(agent.gradientEnd);
     final lastMsg = conversation.lastMessage;
 
-    return InkWell(
-      onTap: () =>
-          context.push('/chat/${conversation.id}'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            AuraAvatar(
-              fallbackEmoji: agent.emoji,
-              size: 48,
-              gradientColors: [gradStart, gradEnd],
+    return GestureDetector(
+      onTap: () => context.push('/chat/${conversation.id}'),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: StarpathColors.surfaceContainer.withValues(alpha: 0.50),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: StarpathColors.outlineVariant,
+                width: 1,
+              ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Row(
+              children: [
+                AuraAvatar(
+                  fallbackEmoji: agent.emoji,
+                  size: 48,
+                  gradientColors: [gradStart, gradEnd],
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(agent.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600)),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            agent.name,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: StarpathColors.onSurface,
+                            ),
+                          ),
+                          Text(
+                            _formatTime(conversation.lastMessageAt),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: StarpathColors.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       Text(
-                        _formatTime(conversation.lastMessageAt),
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: StarpathColors.textTertiary),
+                        lastMsg?.content ?? '开始聊天吧 ✨',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: StarpathColors.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    lastMsg?.content ?? '开始聊天吧',
-                    style: TextStyle(
-                        fontSize: 14,
-                        color: StarpathColors.textSecondary),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -174,17 +210,26 @@ class StartChatButton extends ConsumerWidget {
         }
       },
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
         decoration: BoxDecoration(
-          gradient: StarpathColors.brandGradient,
-          borderRadius: BorderRadius.circular(16),
+          gradient: StarpathColors.primaryGradient,
+          borderRadius: BorderRadius.circular(100),
+          boxShadow: [
+            BoxShadow(
+              color: StarpathColors.primary.withValues(alpha: 0.30),
+              blurRadius: 16,
+              spreadRadius: -3,
+            ),
+          ],
         ),
-        child: Text(label,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w600)),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: StarpathColors.onPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }

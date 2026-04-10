@@ -75,6 +75,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
+  /// 跳过登录与引导，进入主页（无 token，仅浏览 UI；需真实数据时请正常登录）
+  void skipLoginToHome() {
+    ApiClient().clearAuthToken();
+    ApiClient().dio.options.headers.remove('x-user-id');
+    state = const AuthState(
+      isLoggedIn: true,
+      hasCompletedOnboarding: true,
+    );
+  }
+
   Future<void> completeOnboarding() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('onboarding_complete', true);

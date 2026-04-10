@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +10,7 @@ import 'package:starpath/features/agent_studio/presentation/agent_create_page.da
 import 'package:starpath/features/chat/presentation/chat_list_page.dart';
 import 'package:starpath/features/chat/presentation/chat_detail_page.dart';
 import 'package:starpath/features/discovery/presentation/discovery_page.dart';
+import 'package:starpath/features/discovery/presentation/card_detail_page.dart';
 import 'package:starpath/features/creation/presentation/create_card_page.dart';
 import 'package:starpath/features/profile/presentation/profile_page.dart';
 import 'package:starpath/features/profile/presentation/wallet_page.dart';
@@ -25,6 +27,14 @@ GoRouter createRouter(WidgetRef ref) {
     redirect: (context, state) {
       final isLoginRoute = state.matchedLocation == '/login';
       final isOnboardingRoute = state.matchedLocation == '/onboarding';
+
+      // Web 预览：跳过登录与引导，直接进入主页
+      if (kIsWeb) {
+        if (isLoginRoute || isOnboardingRoute) {
+          return '/discovery';
+        }
+        return null;
+      }
 
       if (!authState.isLoggedIn) {
         return isLoginRoute ? null : '/login';
@@ -113,6 +123,12 @@ GoRouter createRouter(WidgetRef ref) {
         path: '/wallet',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const WalletPage(),
+      ),
+      GoRoute(
+        path: '/cards/:cardId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) =>
+            CardDetailPage(cardId: state.pathParameters['cardId']!),
       ),
     ],
   );

@@ -1,19 +1,66 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
+/// ─── Celestial Dreamscape · Design System ────────────────────────────────────
+/// DESIGN.md Spec: "The Celestial Dreamscape"
+/// Deep violet nebula · Bioluminescent accents · Hyper-Rounded · No hard lines
 class StarpathColors {
   StarpathColors._();
 
-  // Brand Gradient
-  static const Color brandPurple = Color(0xFF6C63FF);
-  static const Color brandBlue = Color(0xFF00D2FF);
+  // ── Surface Hierarchy (Level 0 → 2) ─────────────────────────────────────────
+  static const Color surface = Color(0xFF180720);             // Level 0 base
+  static const Color surfaceContainer = Color(0xFF261030);    // Level 1 nesting
+  static const Color surfaceContainerHigh = Color(0xFF341545);
+  static const Color surfaceContainerHighest = Color(0xFF42195A);
+  static const Color surfaceBright = Color(0xFF3D1F54);       // Nav glass base
 
+  // ── Primary · Luminescent Lavender ──────────────────────────────────────────
+  static const Color primary = Color(0xFFCC97FF);
+  static const Color primaryDim = Color(0xFF9F6FD3);
+  static const Color primaryContainer = Color(0xFF4A2670);
+  static const Color onPrimary = Color(0xFF1A0028);
+  static const Color onPrimaryContainer = Color(0xFFE8CFFF);
+
+  // ── Secondary · Softened Violet ─────────────────────────────────────────────
+  static const Color secondary = Color(0xFFD6B2FC);
+  static const Color onSecondary = Color(0xFF220038);
+
+  // ── Tertiary · Warm Gold (moments of awakening) ──────────────────────────────
+  static const Color tertiary = Color(0xFFFFDD7C);
+  static const Color onTertiary = Color(0xFF3D2A00);
+
+  // ── On-Surface Text ──────────────────────────────────────────────────────────
+  static const Color onSurface = Color(0xFFF8DCFF);           // headings (pure)
+  static const Color onSurfaceVariant = Color(0xFFBCA2C4);    // body text
+
+  // ── Ghost Border · 15% opacity · accessibility only ─────────────────────────
+  static const Color outlineVariant = Color(0x26CC97FF);      // primary @ 15%
+
+  // ── Functional ───────────────────────────────────────────────────────────────
+  static const Color error = Color(0xFFFF6B6B);
+  static const Color success = Color(0xFF10B981);
+  static const Color warning = Color(0xFFF59E0B);
+
+  // ── Gradients ────────────────────────────────────────────────────────────────
   static const LinearGradient brandGradient = LinearGradient(
-    colors: [brandPurple, brandBlue],
+    colors: [primary, secondary],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
 
-  // Emotion Spectrum
+  static const LinearGradient primaryGradient = LinearGradient(
+    colors: [primary, primaryDim],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient currencyGradient = LinearGradient(
+    colors: [tertiary, Color(0xFFF0A840)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  // ── Emotion Spectrum (companion avatars) ─────────────────────────────────────
   static const LinearGradient joyGradient = LinearGradient(
     colors: [Color(0xFFFFD93D), Color(0xFFFF6B6B)],
   );
@@ -30,126 +77,202 @@ class StarpathColors {
     colors: [Color(0xFF4D96FF), Color(0xFF00D2FF)],
   );
 
-  // Neutrals
-  static const Color background = Color(0xFFFAFBFF);
-  static const Color cardWhite = Color(0xFFFFFFFF);
-  static const Color textPrimary = Color(0xFF1A1D26);
-  static const Color textSecondary = Color(0xFF6B7280);
-  static const Color textTertiary = Color(0xFF9CA3AF);
-  static const Color divider = Color(0xFFF1F3F9);
+  // ── Backward-compat aliases ───────────────────────────────────────────────────
+  static const Color brandPurple = primary;
+  static const Color brandBlue = secondary;
+  static const Color background = surface;
+  static const Color cardWhite = surfaceContainer;
+  static const Color textPrimary = onSurface;
+  static const Color textSecondary = onSurfaceVariant;
+  static const Color textTertiary = Color(0xFF9882A0);
+  static const Color divider = Color(0xFF3A2048);
 
-  // Functional
-  static const Color success = Color(0xFF10B981);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color error = Color(0xFFEF4444);
-
-  // Currency
-  static const LinearGradient currencyGradient = LinearGradient(
-    colors: [Color(0xFFFFD93D), Color(0xFFFF8C00)],
-  );
-
-  // Predefined companion color palettes
+  // ── Companion Palettes ────────────────────────────────────────────────────────
   static const List<List<Color>> companionPalettes = [
-    [Color(0xFFFF6B6B), Color(0xFFFF8E53)], // Warm Coral
-    [Color(0xFF6C63FF), Color(0xFF00D2FF)], // Brand Purple-Blue
-    [Color(0xFF6BCB77), Color(0xFF4D96FF)], // Nature Green-Blue
-    [Color(0xFFFF85A2), Color(0xFFFFAA85)], // Sakura
-    [Color(0xFF9B59B6), Color(0xFFE74C8F)], // Mystic Purple-Pink
-    [Color(0xFF00B4D8), Color(0xFF0077B6)], // Ocean Blue
-    [Color(0xFFFFD93D), Color(0xFFFF6B6B)], // Sunshine
-    [Color(0xFF48C9B0), Color(0xFF1ABC9C)], // Mint
-    [Color(0xFFF39C12), Color(0xFFE74C3C)], // Autumn
-    [Color(0xFF8E44AD), Color(0xFF3498DB)], // Galaxy
-    [Color(0xFFE91E63), Color(0xFF9C27B0)], // Rose-Violet
-    [Color(0xFF00BCD4), Color(0xFF4CAF50)], // Teal-Green
+    [Color(0xFFFF6B6B), Color(0xFFFF8E53)],
+    [Color(0xFF9B59B6), Color(0xFF6C63FF)],
+    [Color(0xFF6BCB77), Color(0xFF4D96FF)],
+    [Color(0xFFFF85A2), Color(0xFFFFAA85)],
+    [Color(0xFF9B59B6), Color(0xFFE74C8F)],
+    [Color(0xFF00B4D8), Color(0xFF0077B6)],
+    [Color(0xFFFFD93D), Color(0xFFFF6B6B)],
+    [Color(0xFF48C9B0), Color(0xFF1ABC9C)],
+    [Color(0xFFF39C12), Color(0xFFE74C3C)],
+    [Color(0xFF8E44AD), Color(0xFF3498DB)],
+    [Color(0xFFE91E63), Color(0xFF9C27B0)],
+    [Color(0xFF00BCD4), Color(0xFF4CAF50)],
   ];
 }
 
+/// ─── Theme Definition ─────────────────────────────────────────────────────────
 class StarpathTheme {
   StarpathTheme._();
 
-  static ThemeData get lightTheme {
+  // Expose as darkTheme; lightTheme alias kept for backward compat
+  static ThemeData get lightTheme => darkTheme;
+
+  static ThemeData get darkTheme {
+    TextStyle _h(double size, FontWeight weight) =>
+        GoogleFonts.plusJakartaSans(
+          fontSize: size,
+          fontWeight: weight,
+          letterSpacing: -0.02 * size,
+          color: StarpathColors.onSurface,
+          height: 1.2,
+        );
+
+    TextStyle _b(double size, FontWeight weight, Color color) =>
+        GoogleFonts.plusJakartaSans(
+          fontSize: size,
+          fontWeight: weight,
+          color: color,
+          height: 1.55,
+        );
+
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.light,
-      scaffoldBackgroundColor: StarpathColors.background,
-      colorScheme: ColorScheme.light(
-        primary: StarpathColors.brandPurple,
-        secondary: StarpathColors.brandBlue,
-        surface: StarpathColors.cardWhite,
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: StarpathColors.surface,
+
+      colorScheme: const ColorScheme.dark(
+        surface: StarpathColors.surface,
+        primary: StarpathColors.primary,
+        onPrimary: StarpathColors.onPrimary,
+        primaryContainer: StarpathColors.primaryContainer,
+        onPrimaryContainer: StarpathColors.onPrimaryContainer,
+        secondary: StarpathColors.secondary,
+        onSecondary: StarpathColors.onSecondary,
+        tertiary: StarpathColors.tertiary,
+        onTertiary: StarpathColors.onTertiary,
         error: StarpathColors.error,
+        onSurface: StarpathColors.onSurface,
+        onSurfaceVariant: StarpathColors.onSurfaceVariant,
+        outline: StarpathColors.outlineVariant,
+        surfaceContainerLowest: StarpathColors.surface,
+        surfaceContainerLow: StarpathColors.surfaceContainer,
+        surfaceContainer: StarpathColors.surfaceContainerHigh,
+        surfaceContainerHigh: StarpathColors.surfaceContainerHighest,
+        surfaceBright: StarpathColors.surfaceBright,
       ),
-      appBarTheme: const AppBarTheme(
+
+      appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-        titleTextStyle: TextStyle(
-          color: StarpathColors.textPrimary,
+        surfaceTintColor: Colors.transparent,
+        titleTextStyle: GoogleFonts.plusJakartaSans(
+          color: StarpathColors.onSurface,
           fontSize: 17,
           fontWeight: FontWeight.w600,
+          letterSpacing: -0.34,
         ),
-        iconTheme: IconThemeData(color: StarpathColors.textPrimary),
+        iconTheme: const IconThemeData(
+            color: StarpathColors.onSurfaceVariant),
       ),
+
       cardTheme: CardThemeData(
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        color: StarpathColors.cardWhite.withValues(alpha: 0.85),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        color: StarpathColors.surfaceContainer.withValues(alpha: 0.4),
       ),
+
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: StarpathColors.cardWhite.withValues(alpha: 0.7),
+        fillColor: StarpathColors.surfaceContainerHighest,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(100),
           borderSide: BorderSide.none,
         ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(100),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(100),
+          borderSide:
+              const BorderSide(color: StarpathColors.primary, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(100),
+          borderSide:
+              const BorderSide(color: StarpathColors.error, width: 1.5),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(100),
+          borderSide:
+              const BorderSide(color: StarpathColors.error, width: 2),
+        ),
+        hintStyle: GoogleFonts.plusJakartaSans(
+          color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.5),
+          fontSize: 15,
+        ),
+        prefixIconColor: StarpathColors.onSurfaceVariant,
+        errorStyle:
+            GoogleFonts.plusJakartaSans(color: StarpathColors.error, fontSize: 12),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       ),
+
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          minimumSize: const Size(double.infinity, 48),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          minimumSize: const Size(double.infinity, 52),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(100)),
           elevation: 0,
+          backgroundColor: StarpathColors.primary,
+          foregroundColor: StarpathColors.onPrimary,
         ),
       ),
-      textTheme: const TextTheme(
-        headlineLarge: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.bold,
-          height: 36 / 28,
-          color: StarpathColors.textPrimary,
-        ),
-        headlineMedium: TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.w600,
-          height: 30 / 22,
-          color: StarpathColors.textPrimary,
-        ),
-        headlineSmall: TextStyle(
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
-          height: 24 / 17,
-          color: StarpathColors.textPrimary,
-        ),
-        bodyLarge: TextStyle(
-          fontSize: 15,
-          fontWeight: FontWeight.normal,
-          height: 22 / 15,
-          color: StarpathColors.textPrimary,
-        ),
-        bodyMedium: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.normal,
-          height: 18 / 13,
-          color: StarpathColors.textSecondary,
-        ),
-        labelSmall: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          height: 14 / 11,
-          color: StarpathColors.textTertiary,
-        ),
+
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        indicatorColor:
+            StarpathColors.primary.withValues(alpha: 0.15),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: StarpathColors.primary,
+            );
+          }
+          return GoogleFonts.plusJakartaSans(
+            fontSize: 11,
+            color: StarpathColors.onSurfaceVariant,
+          );
+        }),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const IconThemeData(
+                color: StarpathColors.primary, size: 24);
+          }
+          return const IconThemeData(
+              color: StarpathColors.onSurfaceVariant, size: 24);
+        }),
+      ),
+
+      textTheme: TextTheme(
+        displayLarge: _h(56, FontWeight.bold),
+        displayMedium: _h(44, FontWeight.bold),
+        headlineLarge: _h(32, FontWeight.bold),
+        headlineMedium: _h(24, FontWeight.w700),
+        headlineSmall: _h(18, FontWeight.w600),
+        titleLarge: _h(17, FontWeight.w600),
+        titleMedium: _b(15, FontWeight.w600, StarpathColors.onSurface),
+        titleSmall: _b(13, FontWeight.w600, StarpathColors.onSurface),
+        bodyLarge:
+            _b(16, FontWeight.normal, StarpathColors.onSurfaceVariant),
+        bodyMedium:
+            _b(14, FontWeight.normal, StarpathColors.onSurfaceVariant),
+        bodySmall:
+            _b(12, FontWeight.normal, StarpathColors.onSurfaceVariant),
+        labelLarge: _b(14, FontWeight.w600, StarpathColors.onSurface),
+        labelMedium:
+            _b(12, FontWeight.w500, StarpathColors.onSurfaceVariant),
+        labelSmall: _b(11, FontWeight.w500,
+            StarpathColors.onSurfaceVariant.withValues(alpha: 0.7)),
       ),
     );
   }

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -10,16 +8,19 @@ services:
       POSTGRES_PASSWORD: starpath_dev_2024
       POSTGRES_DB: starpath
     ports:
-      - "5432:5432"
+      # 若本机已有 PostgreSQL 占用 5432，改用 5433
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
 
   redis:
     image: redis:7-alpine
     container_name: starpath-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # 若本机已有 Redis 占用 6379，改用 6380
+      - "6380:6379"
     volumes:
       - redis_data:/data
 

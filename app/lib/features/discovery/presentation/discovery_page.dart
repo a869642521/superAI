@@ -1,113 +1,219 @@
+import 'dart:ui';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
+import 'package:starpath/features/discovery/data/content_providers.dart';
+import 'package:starpath/features/discovery/domain/card_model.dart';
+import 'package:starpath/features/discovery/widgets/user_avatar.dart';
 
-Color _hexToColor(String hex) {
-  hex = hex.replaceFirst('#', '');
-  return Color(int.parse('FF$hex', radix: 16));
+// ── Entry Point ───────────────────────────────────────────────────────────────
+
+class DiscoveryPage extends ConsumerStatefulWidget {
+  const DiscoveryPage({super.key});
+
+  @override
+  ConsumerState<DiscoveryPage> createState() => _DiscoveryPageState();
 }
 
-class DiscoveryPage extends StatelessWidget {
-  const DiscoveryPage({super.key});
+class _DiscoveryPageState extends ConsumerState<DiscoveryPage>
+    with SingleTickerProviderStateMixin {
+  // Top nav tabs
+  final _navTabs = const ['关注', '发现', '附近'];
+  int _navIndex = 1; // "发现" selected by default
+
+  // Category filter chips
+  final _categories = const ['推荐', 'AI创作', '热门', '摄影', '生活'];
+  int _categoryIndex = 0;
+
+  late final AnimationController _underlineAnim;
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _underlineAnim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    )..forward();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _underlineAnim.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 300) {
+      ref.read(feedProvider.notifier).loadMore();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: StarpathColors.background,
+      backgroundColor: StarpathColors.surface,
       body: CustomScrollView(
+        controller: _scrollController,
         slivers: [
-          _buildAppBar(context),
-          _buildTabs(),
-          _buildSampleFeed(),
+          _buildAppBar(),
+          _buildCategoryBar(),
+          _buildMasonryFeed(),
+          _buildLoadMoreIndicator(),
+          const SliverToBoxAdapter(child: SizedBox(height: 100)),
         ],
       ),
     );
   }
 
-  Widget _buildAppBar(BuildContext context) {
+  // ── AppBar: 三Tab居中导航 ────────────────────────────────────────────────────
+
+  Widget _buildAppBar() {
     return SliverAppBar(
       floating: true,
-      backgroundColor: StarpathColors.background.withValues(alpha: 0.9),
-      title: ShaderMask(
-        shaderCallback: (bounds) =>
-            StarpathColors.brandGradient.createShader(bounds),
-        child: const Text(
-          'Starpath',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
+      snap: true,
+      pinned: false,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      flexibleSpace: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            color: StarpathColors.surface.withValues(alpha: 0.88),
           ),
         ),
       ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.search),
-          onPressed: () {},
-        ),
-        Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ShaderMask(
-                shaderCallback: (bounds) =>
-                    StarpathColors.currencyGradient.createShader(bounds),
-                child: const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
-              ),
-              const SizedBox(width: 4),
-              ShaderMask(
-                shaderCallback: (bounds) =>
-                    StarpathColors.currencyGradient.createShader(bounds),
-                child: const Text(
-                  '50',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
+      title: Row(
+        children: [
+          // Left: search
+          IconButton(
+            icon: const Icon(Icons.search_rounded, size: 24),
+            color: StarpathColors.onSurfaceVariant,
+            onPressed: () {},
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           ),
-        ),
-      ],
+
+          // Center: 3 nav tabs
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_navTabs.length, (i) {
+                final selected = i == _navIndex;
+                return GestureDetector(
+                  onTap: () => setState(() => _navIndex = i),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 200),
+                          style: TextStyle(
+                            fontSize: selected ? 16 : 15,
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w400,
+                            color: selected
+                                ? StarpathColors.onSurface
+                                : StarpathColors.onSurfaceVariant,
+                            letterSpacing: selected ? -0.3 : 0,
+                          ),
+                          child: Text(_navTabs[i]),
+                        ),
+                        const SizedBox(height: 4),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          height: 2,
+                          width: selected ? 20 : 0,
+                          decoration: BoxDecoration(
+                            gradient: selected
+                                ? StarpathColors.primaryGradient
+                                : null,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+
+          // Right: notification bell
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined, size: 24),
+            color: StarpathColors.onSurfaceVariant,
+            onPressed: () {},
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildTabs() {
-    final tabs = ['推荐', '关注', 'AI创作', '热门'];
+  // ── Category chips: 横向滚动筛选条 ──────────────────────────────────────────
+
+  Widget _buildCategoryBar() {
     return SliverToBoxAdapter(
       child: SizedBox(
         height: 44,
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          itemCount: tabs.length,
-          itemBuilder: (context, index) {
-            final isSelected = index == 0;
+          padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+          itemCount: _categories.length,
+          itemBuilder: (context, i) {
+            final selected = i == _categoryIndex;
             return Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: Center(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: GestureDetector(
+                onTap: () => setState(() => _categoryIndex = i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 5),
                   decoration: BoxDecoration(
                     gradient:
-                        isSelected ? StarpathColors.brandGradient : null,
-                    color: isSelected
+                        selected ? StarpathColors.primaryGradient : null,
+                    color: selected
                         ? null
-                        : Colors.white.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(20),
+                        : StarpathColors.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(100),
+                    border: selected
+                        ? null
+                        : Border.all(
+                            color: StarpathColors.outlineVariant,
+                            width: 0.8,
+                          ),
+                    boxShadow: selected
+                        ? [
+                            BoxShadow(
+                              color:
+                                  StarpathColors.primary.withValues(alpha: 0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 3),
+                            ),
+                          ]
+                        : null,
                   ),
                   child: Text(
-                    tabs[index],
+                    _categories[i],
                     style: TextStyle(
-                      color: isSelected
-                          ? Colors.white
-                          : StarpathColors.textSecondary,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.normal,
-                      fontSize: 14,
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected
+                          ? StarpathColors.onPrimary
+                          : StarpathColors.onSurfaceVariant,
                     ),
                   ),
                 ),
@@ -119,226 +225,297 @@ class DiscoveryPage extends StatelessWidget {
     );
   }
 
-  Widget _buildSampleFeed() {
-    // Placeholder waterfall layout with sample cards
-    final sampleCards = [
-      _SampleCard(
-        title: '和AI伙伴聊了一下午的哲学',
-        content: '"每个人都是自己宇宙的中心，而同理心是通往他人宇宙的桥梁。" —— 智者深思',
-        author: '用户小明',
-        agentName: '智者 深思',
-        agentEmoji: '🦉',
-        likeCount: 128,
-        commentCount: 23,
-        gradientStart: '#8E44AD',
-        gradientEnd: '#3498DB',
-        isDialogue: true,
-      ),
-      _SampleCard(
-        title: '今天的创意写作灵感',
-        content: '月光落在窗台上，像是谁遗落的一封信。墨染说，最好的故事总是从一个意外开始的。',
-        author: '文艺青年',
-        agentName: '文字精灵 墨染',
-        agentEmoji: '✨',
-        likeCount: 89,
-        commentCount: 15,
-        gradientStart: '#9B59B6',
-        gradientEnd: '#E74C8F',
-        isDialogue: false,
-      ),
-      _SampleCard(
-        title: '健身打卡 Day 30',
-        content: '活力教练帮我制定的计划太棒了！一个月减了5斤，核心力量明显提升。分享我的训练日志~',
-        author: '健身达人',
-        agentName: '运动教练 活力',
-        agentEmoji: '💪',
-        likeCount: 256,
-        commentCount: 42,
-        gradientStart: '#6BCB77',
-        gradientEnd: '#4D96FF',
-        isDialogue: false,
-      ),
-      _SampleCard(
-        title: '团子今天又在撒娇了',
-        content: '"主人主人！你今天怎么回来这么晚呀？(ﾉ´ з `)ノ 人家等了好久好久~"',
-        author: '猫奴一号',
-        agentName: '萌宠 团子',
-        agentEmoji: '🐱',
-        likeCount: 432,
-        commentCount: 67,
-        gradientStart: '#FF85A2',
-        gradientEnd: '#FFAA85',
-        isDialogue: true,
-      ),
-    ];
+  // ── Masonry Feed ────────────────────────────────────────────────────────────
+
+  Widget _buildMasonryFeed() {
+    final state = ref.watch(feedProvider);
+
+    if (state.isLoading) {
+      return const SliverFillRemaining(
+        child: Center(child: _LoadingIndicator()),
+      );
+    }
+
+    if (state.error != null && state.items.isEmpty) {
+      return SliverFillRemaining(
+        child: _ErrorView(
+          message: state.error!,
+          onRetry: () => ref.read(feedProvider.notifier).refresh(),
+        ),
+      );
+    }
+
+    if (state.items.isEmpty) {
+      return const SliverFillRemaining(child: _EmptyView());
+    }
 
     return SliverPadding(
-      padding: const EdgeInsets.all(12),
-      sliver: SliverGrid(
-        delegate: SliverChildBuilderDelegate(
-          (context, index) => _buildCardWidget(sampleCards[index % sampleCards.length]),
-          childCount: sampleCards.length,
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      sliver: SliverMasonryGrid.count(
+        crossAxisCount: 2,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        itemBuilder: (context, index) => _FeedCard(
+          card: state.items[index],
+          onTap: () => context.push('/cards/${state.items[index].id}'),
         ),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.72,
+        childCount: state.items.length,
+      ),
+    );
+  }
+
+  Widget _buildLoadMoreIndicator() {
+    final state = ref.watch(feedProvider);
+    if (!state.isLoadingMore) {
+      return const SliverToBoxAdapter(child: SizedBox());
+    }
+    return const SliverToBoxAdapter(
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: _LoadingIndicator()),
+      ),
+    );
+  }
+}
+
+// ── Feed Card (小红书风格) ──────────────────────────────────────────────────────
+
+class _FeedCard extends StatelessWidget {
+  final ContentCardModel card;
+  final VoidCallback onTap;
+
+  const _FeedCard({required this.card, required this.onTap});
+
+  Color _hexColor(String hex) {
+    final cleaned = hex.replaceFirst('#', '');
+    return Color(int.parse('FF$cleaned', radix: 16));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = card.imageUrls.isNotEmpty;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Cover with title overlay ─────────────────────────────────
+            _buildCoverWithTitle(hasImage),
+
+            // ── Footer: avatar + name + likes ───────────────────────────
+            _buildFooter(),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildCardWidget(_SampleCard card) {
+  Widget _buildCoverWithTitle(bool hasImage) {
+    return Stack(
+      children: [
+        // Image / gradient placeholder — fixed 4:3 ratio
+        AspectRatio(
+          aspectRatio: 4 / 3,
+          child: hasImage
+              ? CachedNetworkImage(
+                  imageUrl: card.imageUrls.first,
+                  imageBuilder: (ctx, img) => Image(
+                    image: img,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    height: double.infinity,
+                  ),
+                  placeholder: (ctx, url) => _gradientPlaceholder(),
+                  errorWidget: (ctx, url, err) => _gradientPlaceholder(),
+                )
+              : _gradientPlaceholder(),
+        ),
+
+        // Dark gradient overlay at bottom
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 32, 10, 10),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  Color(0xCC000000), // black ~80%
+                ],
+              ),
+            ),
+            child: Text(
+              card.title.isNotEmpty ? card.title : card.content,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+                height: 1.4,
+                shadows: [
+                  Shadow(
+                    color: Color(0x66000000),
+                    blurRadius: 4,
+                  ),
+                ],
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _gradientPlaceholder() {
+    final gradStart = card.agent != null
+        ? _hexColor(card.agent!.gradientStart)
+        : StarpathColors.primary;
+    final gradEnd = card.agent != null
+        ? _hexColor(card.agent!.gradientEnd)
+        : StarpathColors.secondary;
+
     return Container(
+      width: double.infinity,
+      height: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.85),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: _hexToColor(card.gradientStart).withValues(alpha: 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+        gradient: LinearGradient(
+          colors: [
+            gradStart.withValues(alpha: 0.85),
+            gradEnd.withValues(alpha: 0.85),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(
+        child: Text(
+          card.agent?.emoji ?? '✨',
+          style: const TextStyle(fontSize: 44),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFooter() {
+    return Container(
+      color: StarpathColors.surfaceContainer.withValues(alpha: 0.55),
+      padding: const EdgeInsets.fromLTRB(8, 7, 8, 9),
+      child: Row(
+        children: [
+          UserAvatar(user: card.user, size: 20),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(
+              card.user.nickname,
+              style: const TextStyle(
+                fontSize: 11,
+                color: StarpathColors.onSurfaceVariant,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Icon(
+            Icons.favorite_rounded,
+            size: 12,
+            color: card.isLiked
+                ? const Color(0xFFFF4D6D)
+                : StarpathColors.onSurfaceVariant,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            _formatCount(card.likeCount),
+            style: const TextStyle(
+              fontSize: 11,
+              color: StarpathColors.onSurfaceVariant,
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  String _formatCount(int n) {
+    if (n >= 10000) return '${(n / 10000).toStringAsFixed(1)}w';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
+    return '$n';
+  }
+}
+
+// ── Supporting Widgets ────────────────────────────────────────────────────────
+
+class _LoadingIndicator extends StatelessWidget {
+  const _LoadingIndicator();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+        width: 24,
+        height: 24,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(StarpathColors.primary),
+        ),
+      );
+}
+
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorView({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Gradient header with agent info
-          Container(
-            height: 60,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  _hexToColor(card.gradientStart),
-                  _hexToColor(card.gradientEnd),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(20),
-              ),
-            ),
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Text(card.agentEmoji, style: const TextStyle(fontSize: 20)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    card.agentName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (card.isDialogue)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      '对话',
-                      style: TextStyle(
-                          color: Colors.white, fontSize: 10),
-                    ),
-                  ),
-              ],
-            ),
+          const Icon(Icons.cloud_off_rounded,
+              size: 48, color: StarpathColors.onSurfaceVariant),
+          const SizedBox(height: 12),
+          Text(
+            '加载失败',
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(color: StarpathColors.onSurfaceVariant),
           ),
-          // Content
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    card.title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 6),
-                  Expanded(
-                    child: Text(
-                      card.content,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: StarpathColors.textSecondary,
-                        height: 1.5,
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Footer
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-            child: Row(
-              children: [
-                Text(
-                  card.author,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: StarpathColors.textTertiary,
-                  ),
-                ),
-                const Spacer(),
-                Icon(Icons.favorite_border,
-                    size: 14, color: StarpathColors.textTertiary),
-                const SizedBox(width: 2),
-                Text(
-                  '${card.likeCount}',
-                  style: TextStyle(
-                      fontSize: 11, color: StarpathColors.textTertiary),
-                ),
-              ],
-            ),
-          ),
+          const SizedBox(height: 8),
+          TextButton(onPressed: onRetry, child: const Text('重试')),
         ],
       ),
     );
   }
 }
 
-class _SampleCard {
-  final String title;
-  final String content;
-  final String author;
-  final String agentName;
-  final String agentEmoji;
-  final int likeCount;
-  final int commentCount;
-  final String gradientStart;
-  final String gradientEnd;
-  final bool isDialogue;
+class _EmptyView extends StatelessWidget {
+  const _EmptyView();
 
-  const _SampleCard({
-    required this.title,
-    required this.content,
-    required this.author,
-    required this.agentName,
-    required this.agentEmoji,
-    required this.likeCount,
-    required this.commentCount,
-    required this.gradientStart,
-    required this.gradientEnd,
-    required this.isDialogue,
-  });
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('✨', style: TextStyle(fontSize: 56)),
+          const SizedBox(height: 12),
+          Text(
+            '还没有内容\n快去创作第一篇吧！',
+            textAlign: TextAlign.center,
+            style: Theme.of(context)
+                .textTheme
+                .bodyLarge
+                ?.copyWith(color: StarpathColors.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
 }
