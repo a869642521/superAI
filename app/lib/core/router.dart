@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/auth/presentation/login_page.dart';
 import 'package:starpath/features/onboarding/presentation/onboarding_page.dart';
-import 'package:starpath/features/agent_studio/presentation/agent_studio_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_create_page.dart';
 import 'package:starpath/features/chat/presentation/chat_list_page.dart';
 import 'package:starpath/features/chat/presentation/chat_detail_page.dart';
@@ -25,6 +24,11 @@ GoRouter createRouter(WidgetRef ref) {
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/discovery',
     redirect: (context, state) {
+      final loc = state.uri.path;
+      if (loc == '/' || loc.isEmpty) {
+        return '/discovery';
+      }
+
       final isLoginRoute = state.matchedLocation == '/login';
       final isOnboardingRoute = state.matchedLocation == '/onboarding';
 
@@ -51,6 +55,10 @@ GoRouter createRouter(WidgetRef ref) {
       return null;
     },
     routes: [
+      GoRoute(
+        path: '/',
+        redirect: (context, state) => '/discovery',
+      ),
       GoRoute(
         path: '/login',
         builder: (context, state) => const LoginPage(),
@@ -85,14 +93,6 @@ GoRouter createRouter(WidgetRef ref) {
               GoRoute(
                 path: '/create',
                 builder: (context, state) => const CreateCardPage(),
-              ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/agents',
-                builder: (context, state) => const AgentStudioPage(),
               ),
             ],
           ),

@@ -32,38 +32,87 @@ export class ContentService {
       },
       include: {
         user: { select: { id: true, nickname: true, avatarUrl: true } },
-        agent: { select: { id: true, name: true, emoji: true, gradientStart: true, gradientEnd: true } },
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            emoji: true,
+            gradientStart: true,
+            gradientEnd: true,
+          },
+        },
       },
     });
 
     await this.currencyService.earnFromPublish(userId);
 
-    return card;
+    return { ...card, isLiked: false };
   }
 
-  async getFeed(cursor?: string, limit = 20) {
+  async getFeed(userId?: string, cursor?: string, limit = 20) {
     const where: any = { isPublished: true, deletedAt: null };
     if (cursor) {
       where.createdAt = { lt: new Date(cursor) };
     }
 
-    return this.prisma.contentCard.findMany({
+    const cards = await this.prisma.contentCard.findMany({
       where,
       include: {
         user: { select: { id: true, nickname: true, avatarUrl: true } },
-        agent: { select: { id: true, name: true, emoji: true, gradientStart: true, gradientEnd: true } },
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            emoji: true,
+            gradientStart: true,
+            gradientEnd: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: limit + 1,
     });
+
+    // Resolve isLiked in bulk
+    let likedCardIds = new Set<string>();
+    if (userId && cards.length > 0) {
+      const cardIds = cards.slice(0, limit).map((c) => c.id);
+      const likes = await this.prisma.like.findMany({
+        where: { userId, cardId: { in: cardIds } },
+        select: { cardId: true },
+      });
+      likedCardIds = new Set(likes.map((l) => l.cardId));
+    }
+
+    const hasMore = cards.length > limit;
+    const items = cards.slice(0, limit);
+    const nextCursor = hasMore
+      ? items[items.length - 1].createdAt.toISOString()
+      : null;
+
+    return {
+      items: items.map((card) => ({
+        ...card,
+        isLiked: likedCardIds.has(card.id),
+      })),
+      nextCursor,
+    };
   }
 
-  async getCardById(id: string) {
+  async getCardById(id: string, userId?: string) {
     const card = await this.prisma.contentCard.findUnique({
       where: { id, deletedAt: null },
       include: {
         user: { select: { id: true, nickname: true, avatarUrl: true } },
-        agent: { select: { id: true, name: true, emoji: true, gradientStart: true, gradientEnd: true } },
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            emoji: true,
+            gradientStart: true,
+            gradientEnd: true,
+          },
+        },
         comments: {
           include: {
             user: { select: { id: true, nickname: true, avatarUrl: true } },
@@ -74,7 +123,16 @@ export class ContentService {
       },
     });
     if (!card) throw new NotFoundException('Card not found');
-    return card;
+
+    let isLiked = false;
+    if (userId) {
+      const like = await this.prisma.like.findUnique({
+        where: { userId_cardId: { userId, cardId: id } },
+      });
+      isLiked = !!like;
+    }
+
+    return { ...card, isLiked };
   }
 
   async likeCard(userId: string, cardId: string) {
@@ -91,7 +149,9 @@ export class ContentService {
       }),
     ]);
 
-    const card = await this.prisma.contentCard.findUnique({ where: { id: cardId } });
+    const card = await this.prisma.contentCard.findUnique({
+      where: { id: cardId },
+    });
     if (card) {
       await this.currencyService.earnFromLike(card.userId);
     }
@@ -100,15 +160,19 @@ export class ContentService {
   }
 
   async unlikeCard(userId: string, cardId: string) {
-    await this.prisma.$transaction([
-      this.prisma.like.delete({
-        where: { userId_cardId: { userId, cardId } },
-      }),
-      this.prisma.contentCard.update({
-        where: { id: cardId },
-        data: { likeCount: { decrement: 1 } },
-      }),
-    ]);
+    try {
+      await this.prisma.$transaction([
+        this.prisma.like.delete({
+          where: { userId_cardId: { userId, cardId } },
+        }),
+        this.prisma.contentCard.update({
+          where: { id: cardId },
+          data: { likeCount: { decrement: 1 } },
+        }),
+      ]);
+    } catch {
+      // Already unliked — silently succeed
+    }
     return { liked: false };
   }
 
@@ -125,7 +189,9 @@ export class ContentService {
       data: { commentCount: { increment: 1 } },
     });
 
-    const card = await this.prisma.contentCard.findUnique({ where: { id: cardId } });
+    const card = await this.prisma.contentCard.findUnique({
+      where: { id: cardId },
+    });
     if (card) {
       await this.currencyService.earnFromComment(card.userId);
     }

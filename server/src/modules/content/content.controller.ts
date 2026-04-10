@@ -51,10 +51,15 @@ export class ContentController {
 
   @Get('feed')
   async getFeed(
+    @Headers('x-user-id') userId?: string,
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.contentService.getFeed(cursor, limit ? parseInt(limit) : 20);
+    return this.contentService.getFeed(
+      userId,
+      cursor,
+      limit ? parseInt(limit) : 20,
+    );
   }
 
   @Get('mine')
@@ -63,8 +68,11 @@ export class ContentController {
   }
 
   @Get(':id')
-  async getCardById(@Param('id') id: string) {
-    return this.contentService.getCardById(id);
+  async getCardById(
+    @Param('id') id: string,
+    @Headers('x-user-id') userId?: string,
+  ) {
+    return this.contentService.getCardById(id, userId);
   }
 
   @Post(':id/like')
@@ -90,5 +98,11 @@ export class ContentController {
     @Body() dto: AddCommentDto,
   ) {
     return this.contentService.addComment(userId, id, dto.content);
+  }
+
+  @Get(':id/comments')
+  async getComments(@Param('id') id: string) {
+    const card = await this.contentService.getCardById(id);
+    return (card as any).comments ?? [];
   }
 }

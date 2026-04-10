@@ -122,12 +122,22 @@ class CommentModel {
   final String content;
   final DateTime createdAt;
   final UserBrief user;
+  final int likeCount;
+  final bool isLiked;
+  final int replyCount;
+  final bool isAuthorReply;
+  final List<CommentModel> replies;
 
   const CommentModel({
     required this.id,
     required this.content,
     required this.createdAt,
     required this.user,
+    this.likeCount = 0,
+    this.isLiked = false,
+    this.replyCount = 0,
+    this.isAuthorReply = false,
+    this.replies = const [],
   });
 
   factory CommentModel.fromJson(Map<String, dynamic> json) {
@@ -136,6 +146,14 @@ class CommentModel {
       content: json['content'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
       user: UserBrief.fromJson(json['user'] as Map<String, dynamic>),
+      likeCount: json['likeCount'] as int? ?? 0,
+      isLiked: json['isLiked'] as bool? ?? false,
+      replyCount: json['replyCount'] as int? ?? 0,
+      isAuthorReply: json['isAuthorReply'] as bool? ?? false,
+      replies: (json['replies'] as List<dynamic>?)
+              ?.map((e) => CommentModel.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          const [],
     );
   }
 }

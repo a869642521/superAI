@@ -1,4 +1,6 @@
 import 'package:starpath/core/api_client.dart';
+import 'package:starpath/features/discovery/data/discovery_demo_content.dart';
+import 'package:starpath/features/discovery/data/discovery_mock_feed.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 
 class ContentRepository {
@@ -33,22 +35,43 @@ class ContentRepository {
   }
 
   Future<ContentCardModel> getCard(String id) async {
+    final mock = mockCardById(id);
+    if (mock != null) return mock;
+
     final response = await _api.dio.get('/cards/$id');
     return ContentCardModel.fromJson(
         response.data['data'] as Map<String, dynamic>);
   }
 
   Future<List<CommentModel>> getComments(String cardId) async {
-    final response = await _api.dio.get('/cards/$cardId/comments');
-    final data = response.data['data'] as List? ??
-        response.data as List? ??
-        <dynamic>[];
-    return data
-        .map((e) => CommentModel.fromJson(e as Map<String, dynamic>))
+    var real = <CommentModel>[];
+    if (isMockCardId(cardId)) {
+      final merged = [...real, ...fakeCommentsFor(cardId)];
+      merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return merged;
+    }
+    try {
+      final response = await _api.dio.get('/cards/$cardId/comments');
+      final data = response.data['data'] as List? ??
+          response.data as List? ??
+          <dynamic>[];
+      real = data
+          .map((e) => CommentModel.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      real = [];
+    }
+
+    final seen = <String>{};
+    final merged = [...real, ...fakeCommentsFor(cardId)]
+        .where((comment) => seen.add(comment.id))
         .toList();
+    merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return merged;
   }
 
   Future<bool> likeCard(String id) async {
+    if (isMockCardId(id)) return true;
     try {
       await _api.dio.post('/cards/$id/like');
       return true;
@@ -58,6 +81,7 @@ class ContentRepository {
   }
 
   Future<bool> unlikeCard(String id) async {
+    if (isMockCardId(id)) return true;
     try {
       await _api.dio.delete('/cards/$id/like');
       return true;
@@ -67,6 +91,18 @@ class ContentRepository {
   }
 
   Future<CommentModel> addComment(String cardId, String content) async {
+    if (isMockCardId(cardId)) {
+      return CommentModel(
+        id: 'local-$cardId-${DateTime.now().millisecondsSinceEpoch}',
+        content: content,
+        createdAt: DateTime.now(),
+        user: const UserBrief(
+          id: 'local-me',
+          nickname: '我',
+          avatarUrl: null,
+        ),
+      );
+    }
     final response = await _api.dio
         .post('/cards/$cardId/comments', data: {'content': content});
     final data = response.data['data'] ?? response.data;

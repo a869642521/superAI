@@ -7,14 +7,34 @@ class UserAvatar extends StatelessWidget {
   final UserBrief user;
   final double size;
 
-  const UserAvatar({super.key, required this.user, this.size = 24});
+  /// When true, ignore [user.avatarUrl] and show a varied portrait from DiceBear
+  /// (deterministic per [user.id], stable across rebuilds).
+  final bool useRandomAvatar;
+
+  const UserAvatar({
+    super.key,
+    required this.user,
+    this.size = 24,
+    this.useRandomAvatar = false,
+  });
+
+  String? get _effectiveUrl {
+    if (useRandomAvatar) {
+      final seed = Uri.encodeComponent('${user.id}|${user.nickname}');
+      return 'https://api.dicebear.com/7.x/notionists/png?seed=$seed&size=128';
+    }
+    final u = user.avatarUrl;
+    if (u != null && u.isNotEmpty) return u;
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (user.avatarUrl != null && user.avatarUrl!.isNotEmpty) {
+    final url = _effectiveUrl;
+    if (url != null) {
       return ClipOval(
         child: CachedNetworkImage(
-          imageUrl: user.avatarUrl!,
+          imageUrl: url,
           width: size,
           height: size,
           fit: BoxFit.cover,

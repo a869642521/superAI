@@ -31,6 +31,17 @@
 
   <title>starpath</title>
   <link rel="manifest" href="manifest.json">
+  <!-- 与 main.dart Web 外层一致：避免加载前/画布外露出深色 -->
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background-color: #FAFAFA;
+    }
+    body.flutter-loading {
+      background-color: #FAFAFA;
+    }
+  </style>
 </head>
 <body>
   <!--

@@ -2,11 +2,12 @@ import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/discovery/data/content_providers.dart';
-import 'package:starpath/features/discovery/data/content_repository.dart';
+import 'package:starpath/features/discovery/data/discovery_demo_content.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/discovery/widgets/user_avatar.dart';
 
@@ -39,15 +40,20 @@ class CardDetailPage extends ConsumerStatefulWidget {
 }
 
 class _CardDetailPageState extends ConsumerState<CardDetailPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _commentController = TextEditingController();
+  final _commentFocusNode = FocusNode();
   final _scrollController = ScrollController();
+  late final PageController _galleryPageController;
   bool _isSendingComment = false;
+  int _galleryPageIndex = 0;
+  bool _showBurstHeart = false;
   late final AnimationController _heartAnim;
 
   @override
   void initState() {
     super.initState();
+    _galleryPageController = PageController();
     _heartAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -60,9 +66,19 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
   @override
   void dispose() {
     _commentController.dispose();
+    _commentFocusNode.dispose();
     _scrollController.dispose();
+    _galleryPageController.dispose();
     _heartAnim.dispose();
     super.dispose();
+  }
+
+  void _onGalleryDoubleTap(ContentCardModel card) {
+    _toggleLike(card);
+    setState(() => _showBurstHeart = true);
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _showBurstHeart = false);
+    });
   }
 
   Future<void> _toggleLike(ContentCardModel card) async {
@@ -122,6 +138,14 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
     }
   }
 
+  void _prepareReply(CommentModel comment) {
+    _commentController.text = '回复 @${comment.user.nickname} ';
+    _commentController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _commentController.text.length),
+    );
+    _commentFocusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     final cardAsync = ref.watch(_cardDetailProvider(widget.cardId));
@@ -141,15 +165,17 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
 
   Widget _buildContent(ContentCardModel card) {
     final localLike = ref.watch(_localLikeProvider(widget.cardId));
+    final commentsAsync = ref.watch(_commentsProvider(widget.cardId));
     final isLiked = localLike ?? card.isLiked;
+    final displayTitle = displayTitleForCard(card);
+    final publishMeta = publishMetaForCard(card);
+    final tags = tagsForCard(card);
+    final commentCount = commentsAsync.valueOrNull?.length ?? card.commentCount;
 
-    // Compute displayed like count adjusted for local state
-    int displayLike = card.likeCount;
+    var displayLike = card.likeCount;
     if (localLike != null) {
-      final diff = localLike ? 1 : -1;
-      final baseDiff = card.isLiked ? 1 : 0;
-      displayLike = card.likeCount - baseDiff + (localLike ? 1 : 0);
-      displayLike = card.likeCount + diff - (card.isLiked ? 1 : 0);
+      if (localLike == true && !card.isLiked) displayLike += 1;
+      if (localLike == false && card.isLiked) displayLike -= 1;
     }
 
     return Stack(
@@ -157,30 +183,76 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
         CustomScrollView(
           controller: _scrollController,
           slivers: [
-            _buildSliverAppBar(card),
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  MediaQuery.of(context).padding.top + 12,
+                  16,
+                  0,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Title
-                    if (card.title.isNotEmpty) ...[
+                    _buildMediaCard(card),
+                    const SizedBox(height: 18),
+                    Text(
+                      displayTitle,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: StarpathColors.onSurface,
+                        letterSpacing: -0.44,
+                        height: 1.3,
+                      ),
+                    ),
+                    if (card.title.isNotEmpty && card.title != displayTitle) ...[
+                      const SizedBox(height: 6),
                       Text(
                         card.title,
                         style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          color: StarpathColors.onSurface,
-                          letterSpacing: -0.44,
-                          height: 1.3,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: StarpathColors.onSurfaceVariant,
+                          height: 1.35,
                         ),
                       ),
-                      const SizedBox(height: 12),
                     ],
+                    const SizedBox(height: 12),
 
                     // Author row
-                    _AuthorRow(user: card.user),
+                    _AuthorRow(user: card.user, publishMeta: publishMeta),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: tags
+                          .map(
+                            (tag) => Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: StarpathColors.surfaceContainerHigh
+                                    .withValues(alpha: 0.72),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: StarpathColors.outlineVariant,
+                                ),
+                              ),
+                              child: Text(
+                                tag,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: StarpathColors.primary,
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
                     const SizedBox(height: 16),
 
                     // Body content
@@ -199,6 +271,14 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                       _AgentTag(agent: card.agent!),
                     ],
 
+                    const SizedBox(height: 20),
+                    _SocialStatsRow(
+                      likeCount: displayLike,
+                      commentCount: commentCount,
+                      favoriteCount: favoriteCountForCard(card),
+                      shareCount: shareCountForCard(card),
+                    ),
+
                     // Divider
                     const SizedBox(height: 24),
                     Divider(
@@ -206,36 +286,19 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                       thickness: 0.8,
                     ),
                     const SizedBox(height: 8),
-
-                    // Comments header
-                    Row(
-                      children: [
-                        Text(
-                          '评论',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: StarpathColors.onSurface,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${card.commentCount}',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: StarpathColors.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
                   ],
                 ),
               ),
             ),
-            _buildComments(card),
+            _buildComments(card, commentsAsync),
             const SliverToBoxAdapter(child: SizedBox(height: 120)),
           ],
+        ),
+
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 8,
+          left: 16,
+          child: _buildBackButton(),
         ),
 
         // Bottom action bar: like + comment
@@ -249,6 +312,7 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
             displayLikeCount: displayLike,
             heartAnim: _heartAnim,
             commentController: _commentController,
+            commentFocusNode: _commentFocusNode,
             isSendingComment: _isSendingComment,
             onLike: () => _toggleLike(card),
             onSend: () => _sendComment(card),
@@ -258,58 +322,214 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
     );
   }
 
-  Widget _buildSliverAppBar(ContentCardModel card) {
-    final hasImage = card.imageUrls.isNotEmpty;
-
-    return SliverAppBar(
-      expandedHeight: hasImage ? 300 : 180,
-      pinned: true,
-      stretch: true,
-      backgroundColor: StarpathColors.surface,
-      leading: Padding(
-        padding: const EdgeInsets.all(8),
-        child: ClipOval(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              color: StarpathColors.surfaceContainer.withValues(alpha: 0.6),
-              child: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_rounded, size: 18),
-                color: StarpathColors.onSurface,
-                onPressed: () => context.pop(),
-              ),
-            ),
+  Widget _buildBackButton() {
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          color: StarpathColors.surfaceContainer.withValues(alpha: 0.6),
+          child: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_rounded, size: 18),
+            color: StarpathColors.onSurface,
+            onPressed: () => context.pop(),
           ),
         ),
-      ),
-      flexibleSpace: FlexibleSpaceBar(
-        stretchModes: const [StretchMode.zoomBackground],
-        background: hasImage
-            ? _CoverImage(url: card.imageUrls.first)
-            : _GradientCover(card: card),
       ),
     );
   }
 
-  Widget _buildComments(ContentCardModel card) {
-    final commentsAsync = ref.watch(_commentsProvider(widget.cardId));
+  Widget _buildMediaCard(ContentCardModel card) {
+    final urls = galleryUrlsForCard(card);
+    final ratio = coverAspectRatioForCard(card);
 
-    return commentsAsync.when(
-      loading: () => const SliverToBoxAdapter(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+            spreadRadius: -8,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: GestureDetector(
+          onDoubleTap: () => _onGalleryDoubleTap(card),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              AspectRatio(
+                aspectRatio: ratio,
+                child: PageView.builder(
+                  controller: _galleryPageController,
+                  onPageChanged: (i) => setState(() => _galleryPageIndex = i),
+                  itemCount: urls.length,
+                  itemBuilder: (context, i) {
+                    Widget img = CachedNetworkImage(
+                      imageUrl: urls[i],
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      errorWidget: (_, __, ___) => _GradientCover(card: card),
+                    );
+                    if (i == 0) {
+                      img = Hero(
+                        tag: 'card-cover-${card.id}',
+                        child: img,
+                      );
+                    }
+                    return img;
+                  },
+                ),
+              ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.34),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${_galleryPageIndex + 1}/${urls.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              if (urls.length > 1)
+                Positioned(
+                  bottom: 14,
+                  left: 0,
+                  right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(urls.length, (i) {
+                      final active = i == _galleryPageIndex;
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        width: active ? 16 : 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: active
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              if (_showBurstHeart)
+                Center(
+                  child: Icon(
+                    Icons.favorite_rounded,
+                    size: 100,
+                    color: const Color(0xFFFF4D6D).withValues(alpha: 0.92),
+                  )
+                      .animate()
+                      .scale(
+                        duration: 220.ms,
+                        begin: const Offset(0.35, 0.35),
+                        curve: Curves.easeOutBack,
+                      )
+                      .fadeOut(
+                        delay: 350.ms,
+                        duration: 280.ms,
+                      ),
+                ),
+            ],
+          ),
         ),
       ),
-      error: (e, _) => const SliverToBoxAdapter(child: SizedBox()),
+    );
+  }
+
+  Widget _buildComments(
+    ContentCardModel card,
+    AsyncValue<List<CommentModel>> commentsAsync,
+  ) {
+
+    Widget headerRow(int count, {bool loading = false}) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+        child: Row(
+          children: [
+            Text(
+              '评论',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: StarpathColors.onSurface,
+              ),
+            ),
+            const SizedBox(width: 6),
+            if (loading)
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Text(
+                '$count',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: StarpathColors.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return commentsAsync.when(
+      loading: () => SliverToBoxAdapter(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            headerRow(0, loading: true),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          ],
+        ),
+      ),
+      error: (e, _) => SliverToBoxAdapter(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            headerRow(fakeCommentsFor(widget.cardId).length),
+            ...fakeCommentsFor(widget.cardId).map(
+              (c) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                child: _CommentTile(
+                  comment: c,
+                  onReplyTap: _prepareReply,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
       data: (comments) {
         if (comments.isEmpty) {
           return SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 32),
+              padding: const EdgeInsets.symmetric(vertical: 24),
               child: Center(
                 child: Text(
-                  '还没有评论，来抢沙发吧 🎉',
+                  '还没有评论，来抢沙发吧',
                   style: const TextStyle(
                     color: StarpathColors.onSurfaceVariant,
                     fontSize: 13,
@@ -321,11 +541,20 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
         }
         return SliverList(
           delegate: SliverChildBuilderDelegate(
-            (context, i) => Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-              child: _CommentTile(comment: comments[i]),
-            ),
-            childCount: comments.length,
+            (context, i) {
+              if (i == 0) {
+                return headerRow(comments.length);
+              }
+              final comment = comments[i - 1];
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                child: _CommentTile(
+                  comment: comment,
+                  onReplyTap: _prepareReply,
+                ),
+              );
+            },
+            childCount: comments.length + 1,
           ),
         );
       },
@@ -341,6 +570,7 @@ class _BottomBar extends StatelessWidget {
   final int displayLikeCount;
   final AnimationController heartAnim;
   final TextEditingController commentController;
+  final FocusNode commentFocusNode;
   final bool isSendingComment;
   final VoidCallback onLike;
   final VoidCallback onSend;
@@ -351,6 +581,7 @@ class _BottomBar extends StatelessWidget {
     required this.displayLikeCount,
     required this.heartAnim,
     required this.commentController,
+    required this.commentFocusNode,
     required this.isSendingComment,
     required this.onLike,
     required this.onSend,
@@ -384,6 +615,7 @@ class _BottomBar extends StatelessWidget {
                     ),
                     child: TextField(
                       controller: commentController,
+                      focusNode: commentFocusNode,
                       style: const TextStyle(
                         fontSize: 14,
                         color: StarpathColors.onSurface,
@@ -475,31 +707,6 @@ class _BottomBar extends StatelessWidget {
 
 // ── Sub-widgets ───────────────────────────────────────────────────────────────
 
-class _CoverImage extends StatelessWidget {
-  final String url;
-  const _CoverImage({required this.url});
-
-  @override
-  Widget build(BuildContext context) => CachedNetworkImage(
-        imageUrl: url,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-        errorWidget: (_, __, ___) => const _GradientFallback(),
-      );
-}
-
-class _GradientFallback extends StatelessWidget {
-  const _GradientFallback();
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: const BoxDecoration(
-          gradient: StarpathColors.primaryGradient,
-        ),
-      );
-}
-
 class _GradientCover extends StatelessWidget {
   final ContentCardModel card;
   const _GradientCover({required this.card});
@@ -541,7 +748,12 @@ class _GradientCover extends StatelessWidget {
 
 class _AuthorRow extends StatelessWidget {
   final UserBrief user;
-  const _AuthorRow({required this.user});
+  final String publishMeta;
+
+  const _AuthorRow({
+    required this.user,
+    required this.publishMeta,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -559,6 +771,14 @@ class _AuthorRow extends StatelessWidget {
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: StarpathColors.onSurface,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                publishMeta,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: StarpathColors.textTertiary,
                 ),
               ),
             ],
@@ -581,6 +801,58 @@ class _AuthorRow extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+class _SocialStatsRow extends StatelessWidget {
+  final int likeCount;
+  final int commentCount;
+  final int favoriteCount;
+  final int shareCount;
+
+  const _SocialStatsRow({
+    required this.likeCount,
+    required this.commentCount,
+    required this.favoriteCount,
+    required this.shareCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget item(IconData icon, String label) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: StarpathColors.textTertiary),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: StarpathColors.textTertiary,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Wrap(
+      spacing: 16,
+      runSpacing: 10,
+      children: [
+        item(Icons.favorite_rounded, _fmt(likeCount)),
+        item(Icons.chat_bubble_rounded, _fmt(commentCount)),
+        item(Icons.bookmark_rounded, _fmt(favoriteCount)),
+        item(Icons.reply_rounded, _fmt(shareCount)),
+      ],
+    );
+  }
+
+  String _fmt(int n) {
+    if (n >= 10000) return '${(n / 10000).toStringAsFixed(1)}w';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
+    return '$n';
   }
 }
 
@@ -659,12 +931,94 @@ class _AgentTag extends StatelessWidget {
   }
 }
 
-class _CommentTile extends StatelessWidget {
+class _CommentTile extends StatefulWidget {
   final CommentModel comment;
-  const _CommentTile({required this.comment});
+  final ValueChanged<CommentModel> onReplyTap;
+
+  const _CommentTile({
+    required this.comment,
+    required this.onReplyTap,
+  });
+
+  @override
+  State<_CommentTile> createState() => _CommentTileState();
+}
+
+class _CommentTileState extends State<_CommentTile> {
+  late bool _liked = widget.comment.isLiked;
+  late int _likeCount = widget.comment.likeCount;
+  bool _expandedReplies = false;
 
   @override
   Widget build(BuildContext context) {
+    final comment = widget.comment;
+
+    Widget actionsRow({bool nested = false}) {
+      return Row(
+        children: [
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _liked = !_liked;
+                _likeCount += _liked ? 1 : -1;
+              });
+            },
+            child: Row(
+              children: [
+                Icon(
+                  _liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 15,
+                  color: _liked
+                      ? const Color(0xFFFF4D6D)
+                      : StarpathColors.textTertiary,
+                ),
+                if (_likeCount > 0) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    '$_likeCount',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: StarpathColors.textTertiary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          GestureDetector(
+            onTap: () => widget.onReplyTap(comment),
+            child: const Text(
+              '回复',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: StarpathColors.textTertiary,
+              ),
+            ),
+          ),
+          if (!nested && comment.replies.isNotEmpty) ...[
+            const SizedBox(width: 14),
+            GestureDetector(
+              onTap: () => setState(() => _expandedReplies = !_expandedReplies),
+              child: Text(
+                _expandedReplies
+                    ? '收起回复'
+                    : '展开${comment.replies.length}条回复',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: StarpathColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -674,13 +1028,55 @@ class _CommentTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                comment.user.nickname,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: StarpathColors.onSurface,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            comment.user.nickname,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: StarpathColors.onSurface,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (comment.isAuthorReply) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: StarpathColors.primaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              '作者',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: StarpathColors.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    relativeCommentTime(comment.createdAt),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: StarpathColors.textTertiary,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               Text(
@@ -690,6 +1086,149 @@ class _CommentTile extends StatelessWidget {
                   color: StarpathColors.onSurfaceVariant,
                   height: 1.5,
                 ),
+              ),
+              const SizedBox(height: 8),
+              actionsRow(),
+              if (_expandedReplies && comment.replies.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                  decoration: BoxDecoration(
+                    color:
+                        StarpathColors.surfaceContainerHigh.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    children: comment.replies
+                        .map(
+                          (reply) => Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _NestedReplyTile(
+                              comment: reply,
+                              onReplyTap: widget.onReplyTap,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NestedReplyTile extends StatefulWidget {
+  final CommentModel comment;
+  final ValueChanged<CommentModel> onReplyTap;
+
+  const _NestedReplyTile({
+    required this.comment,
+    required this.onReplyTap,
+  });
+
+  @override
+  State<_NestedReplyTile> createState() => _NestedReplyTileState();
+}
+
+class _NestedReplyTileState extends State<_NestedReplyTile> {
+  late bool _liked = widget.comment.isLiked;
+  late int _likeCount = widget.comment.likeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final comment = widget.comment;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        UserAvatar(user: comment.user, size: 26),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      comment.user.nickname,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: StarpathColors.onSurface,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    relativeCommentTime(comment.createdAt),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: StarpathColors.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                comment.content,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: StarpathColors.onSurfaceVariant,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _liked = !_liked;
+                        _likeCount += _liked ? 1 : -1;
+                      });
+                    },
+                    child: Row(
+                      children: [
+                        Icon(
+                          _liked
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
+                          size: 14,
+                          color: _liked
+                              ? const Color(0xFFFF4D6D)
+                              : StarpathColors.textTertiary,
+                        ),
+                        if (_likeCount > 0) ...[
+                          const SizedBox(width: 4),
+                          Text(
+                            '$_likeCount',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: StarpathColors.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  GestureDetector(
+                    onTap: () => widget.onReplyTap(comment),
+                    child: const Text(
+                      '回复',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: StarpathColors.textTertiary,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

@@ -6,6 +6,7 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/discovery/data/content_providers.dart';
+import 'package:starpath/features/discovery/data/discovery_demo_content.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/discovery/widgets/user_avatar.dart';
 
@@ -293,19 +294,37 @@ class _FeedCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasImage = card.imageUrls.isNotEmpty;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: ClipRRect(
+    return Material(
+      color: StarpathColors.surfaceContainer.withValues(alpha: 0.42),
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(12),
+        splashColor: StarpathColors.primary.withValues(alpha: 0.14),
+        highlightColor: StarpathColors.primary.withValues(alpha: 0.06),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Cover with title overlay ─────────────────────────────────
-            _buildCoverWithTitle(hasImage),
+            _buildCover(),
 
-            // ── Footer: avatar + name + likes ───────────────────────────
+            // Title below image
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: Text(
+                displayTitleForCard(card),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: StarpathColors.onSurface,
+                  height: 1.4,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.start,
+              ),
+            ),
+
             _buildFooter(),
           ],
         ),
@@ -313,63 +332,48 @@ class _FeedCard extends StatelessWidget {
     );
   }
 
-  Widget _buildCoverWithTitle(bool hasImage) {
+  /// 封面：3:4 或 4:3；首图与详情轮播第一张一致（便于 Hero）
+  Widget _buildCover() {
+    final urls = galleryUrlsForCard(card);
+    final url = urls.first;
+    final showMultiBadge = urls.length > 1;
     return Stack(
+      clipBehavior: Clip.none,
       children: [
-        // Image / gradient placeholder — fixed 4:3 ratio
         AspectRatio(
-          aspectRatio: 4 / 3,
-          child: hasImage
-              ? CachedNetworkImage(
-                  imageUrl: card.imageUrls.first,
-                  imageBuilder: (ctx, img) => Image(
-                    image: img,
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    height: double.infinity,
-                  ),
-                  placeholder: (ctx, url) => _gradientPlaceholder(),
-                  errorWidget: (ctx, url, err) => _gradientPlaceholder(),
-                )
-              : _gradientPlaceholder(),
-        ),
-
-        // Dark gradient overlay at bottom
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 32, 10, 10),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.transparent,
-                  Color(0xCC000000), // black ~80%
-                ],
+          aspectRatio: coverAspectRatioForCard(card),
+          child: Hero(
+            tag: 'card-cover-${card.id}',
+            child: CachedNetworkImage(
+              imageUrl: url,
+              imageBuilder: (ctx, img) => Image(
+                image: img,
+                fit: BoxFit.cover,
+                width: double.infinity,
+                height: double.infinity,
               ),
-            ),
-            child: Text(
-              card.title.isNotEmpty ? card.title : card.content,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-                height: 1.4,
-                shadows: [
-                  Shadow(
-                    color: Color(0x66000000),
-                    blurRadius: 4,
-                  ),
-                ],
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              placeholder: (ctx, u) => _gradientPlaceholder(),
+              errorWidget: (ctx, u, err) => _gradientPlaceholder(),
             ),
           ),
         ),
+        if (showMultiBadge)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.48),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.layers_rounded,
+                color: Colors.white,
+                size: 14,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -410,7 +414,11 @@ class _FeedCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 7, 8, 9),
       child: Row(
         children: [
-          UserAvatar(user: card.user, size: 20),
+          UserAvatar(
+            user: card.user,
+            size: 20,
+            useRandomAvatar: true,
+          ),
           const SizedBox(width: 5),
           Expanded(
             child: Text(
