@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
@@ -9,15 +10,19 @@ class ApiClient {
   ApiClient._internal() {
     dio = Dio(BaseOptions(
       baseUrl: 'http://localhost:3000/api/v1',
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 30),
+      connectTimeout: const Duration(seconds: 6),
+      receiveTimeout: const Duration(seconds: 15),
       headers: {'Content-Type': 'application/json'},
     ));
 
-    dio.interceptors.add(LogInterceptor(
-      requestBody: true,
-      responseBody: true,
-    ));
+    // 仅在 debug 模式下输出日志，避免无后端时的噪音
+    if (kDebugMode) {
+      dio.interceptors.add(LogInterceptor(
+        requestBody: false,
+        responseBody: false,
+        error: false,
+      ));
+    }
   }
 
   void setAuthToken(String token) {

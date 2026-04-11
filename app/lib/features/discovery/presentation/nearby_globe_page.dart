@@ -1,6 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
@@ -26,25 +26,32 @@ class GlobeAgent {
   UserBrief get userBrief => UserBrief(id: id, nickname: name);
 }
 
-// ── Mock Data ─────────────────────────────────────────────────────────────────
+// ── Mock Data — 60 个球面均匀分布 ─────────────────────────────────────────────
 
-// 球面均匀随机分布，seed 固定保证每次相同
 final _mockAgents = _generateAgents();
 
 List<GlobeAgent> _generateAgents() {
   const names = [
-    '星际旅人', 'Luna', 'Muse', 'Sakura', 'Aurora',
-    'Prism', 'Echo', 'Nova', 'Drift', 'Zen',
-    '夜雨', 'Pixel', 'Lyra', 'Cipher', 'Volta',
-    '光年', 'Iris', 'Spark', 'Vega', 'Nebula',
+    '星际旅人', 'Luna', 'Muse', 'Sakura', 'Aurora', 'Prism', 'Echo', 'Nova',
+    'Drift', 'Zen', '夜雨', 'Pixel', 'Lyra', 'Cipher', 'Volta', '光年',
+    'Iris', 'Spark', 'Vega', 'Nebula', 'Comet', 'Astra', '晓风', 'Lumen',
+    'Sable', 'Quill', '灵曦', 'Blaze', 'Crest', 'Opal', 'Rune', '幻影',
+    'Flare', 'Dusk', '云霄', 'Soleil', 'Myra', '凌霄', 'Jinx', 'Halo',
+    'Zara', '晨星', 'Clio', 'Ember', '紫烟', 'Fable', 'Onyx', '追风',
+    'Vesper', 'Wren', '梦织', 'Axel', 'Celeste', '虹影', 'Phos', 'Seren',
+    '流光', 'Kira', 'Thorn', 'Lux',
   ];
   const cities = [
-    '北京', '纽约', '巴黎', '东京', '奥斯陆',
-    '悉尼', '伦敦', '新德里', '圣保罗', '洛杉矶',
-    '上海', '旧金山', '莫斯科', '新加坡', '约翰内斯堡',
-    '深圳', '伊斯坦布尔', '墨西哥城', '迪拜', '蒙特利尔',
+    '北京', '纽约', '巴黎', '东京', '奥斯陆', '悉尼', '伦敦', '新德里',
+    '圣保罗', '洛杉矶', '上海', '旧金山', '莫斯科', '新加坡', '约翰内斯堡', '深圳',
+    '伊斯坦布尔', '墨西哥城', '迪拜', '蒙特利尔', '首尔', '开罗', '成都', '柏林',
+    '阿姆斯特丹', '迈阿密', '孟买', '里约', '多伦多', '香港', '台北', '马德里',
+    '雅典', '里斯本', '曼谷', '维也纳', '布宜诺斯艾利斯', '武汉', '雅加达', '奥克兰',
+    '拉各斯', '卡拉奇', '德黑兰', '哥本哈根', '斯德哥尔摩', '波哥大', '基辅', '西安',
+    '布达佩斯', '华沙', '布拉格', '旧金山', '苏黎世', '杭州', '罗马', '广州',
+    '赫尔辛基', '曼彻斯特', '天津', '达拉斯',
   ];
-  final rng = Random(0x5A7EBA11);
+  final rng = Random(0xA1B2C3D4);
   return List.generate(names.length, (i) {
     final theta = acos(1 - 2 * rng.nextDouble());
     final phi = rng.nextDouble() * 2 * pi;
@@ -52,10 +59,10 @@ List<GlobeAgent> _generateAgents() {
     final lng = phi * 180 / pi - 180;
     return GlobeAgent(
       id: 'ga${(i + 1).toString().padLeft(2, '0')}',
-      name: names[i],
+      name: names[i % names.length],
       lat: lat,
       lng: lng,
-      city: cities[i],
+      city: cities[i % cities.length],
     );
   });
 }
@@ -70,72 +77,75 @@ class NearbyGlobePage extends StatefulWidget {
 }
 
 class _NearbyGlobePageState extends State<NearbyGlobePage>
-    with TickerProviderStateMixin {
-  double _rotX = 0.25;
-  double _rotY = -2.0; // 初始朝向中国
+    with SingleTickerProviderStateMixin {
+  double _rotX = 0.18;
+  double _rotY = -1.5;
 
-  double _dragStartGX = 0;
-  double _dragStartGY = 0;
-  double _rotXStart = 0;
-  double _rotYStart = 0;
+  double _startGX = 0, _startGY = 0;
+  double _rotXStart = 0, _rotYStart = 0;
 
-  // 惯性动画
-  late AnimationController _inertiaX;
-  late AnimationController _inertiaY;
-  FrictionSimulation? _simX;
-  FrictionSimulation? _simY;
+  double _vX = 0, _vY = 0;
+  bool _isDragging = false;
+
+  late Ticker _ticker;
+  Duration? _lastTickTime;
 
   GlobeAgent? _selected;
+
+  // 地球中心 & 半径（供 build 和 _buildMarkers 共享）
+  Offset _globeCenter = Offset.zero;
+  double _globeR = 0;
 
   @override
   void initState() {
     super.initState();
-    _inertiaX = AnimationController.unbounded(vsync: this)
-      ..addListener(_tickInertia);
-    _inertiaY = AnimationController.unbounded(vsync: this)
-      ..addListener(_tickInertia);
+    _ticker = createTicker(_onTick);
+    _ticker.start(); // 始终运行，支持自动慢转
   }
 
   @override
   void dispose() {
-    _inertiaX.dispose();
-    _inertiaY.dispose();
+    _ticker.dispose();
     super.dispose();
   }
 
-  void _tickInertia() {
-    setState(() {
-      if (_simX != null) _rotX = _simX!.x(_inertiaX.value).clamp(-pi / 2.2, pi / 2.2);
-      if (_simY != null) _rotY = _simY!.x(_inertiaY.value);
-    });
-  }
+  // ── 自动旋转 + 惯性衰减 ───────────────────────────────────────────────────
 
-  void _stopInertia() {
-    _inertiaX.stop();
-    _inertiaY.stop();
-    _simX = null;
-    _simY = null;
+  static const _autoVY = 0.18; // rad/s 慢转
+
+  void _onTick(Duration elapsed) {
+    if (_lastTickTime == null) {
+      _lastTickTime = elapsed;
+      return;
+    }
+    final dt = (elapsed - _lastTickTime!).inMicroseconds / 1e6;
+    _lastTickTime = elapsed;
+
+    // 拖拽中 或 已选中头像（卡片展示中）→ 冻结地球，停止一切旋转
+    if (dt <= 0 || dt > 0.05 || _isDragging || _selected != null) return;
+
+    final decay = exp(-3.2 * dt);
+    setState(() {
+      _rotX = (_rotX + _vX * dt).clamp(-pi / 2.05, pi / 2.05);
+      _rotY += (_vY + _autoVY) * dt;
+      _vX *= decay;
+      _vY *= decay;
+      if (_vX.abs() < 0.01) _vX = 0;
+      if (_vY.abs() < 0.01) _vY = 0;
+    });
   }
 
   // ── 球面投影 ──────────────────────────────────────────────────────────────
 
   ({Offset pos, double depth})? _project(
-    GlobeAgent agent,
-    Offset center,
-    double radius,
-  ) {
-    return _projectLatLng(agent.lat, agent.lng, center, radius);
+      double latDeg, double lngDeg, Offset center, double r) {
+    final latR = latDeg * pi / 180;
+    final lngR = lngDeg * pi / 180;
+    return _projectRad(latR, lngR, center, r);
   }
 
-  ({Offset pos, double depth})? _projectLatLng(
-    double lat,
-    double lng,
-    Offset center,
-    double radius,
-  ) {
-    final latR = lat * pi / 180;
-    final lngR = lng * pi / 180;
-
+  ({Offset pos, double depth})? _projectRad(
+      double latR, double lngR, Offset center, double r) {
     double x0 = cos(latR) * sin(lngR);
     double y0 = sin(latR);
     double z0 = cos(latR) * cos(lngR);
@@ -148,129 +158,168 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     final x2 = x0 * cosY + z1 * sinY;
     final z2 = -x0 * sinY + z1 * cosY;
 
-    if (z2 < -0.05) return null;
+    if (z2 < -0.02) return null;
 
-    final screenX = center.dx + x2 * radius;
-    final screenY = center.dy - y1 * radius;
     final depth = ((z2 + 1) / 2).clamp(0.0, 1.0);
-
-    return (pos: Offset(screenX, screenY), depth: depth);
+    return (
+      pos: Offset(center.dx + x2 * r, center.dy - y1 * r),
+      depth: depth,
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final globeR = size.width * 0.42;
-    final center = Offset(size.width / 2, size.height * 0.42);
+    return LayoutBuilder(builder: (context, constraints) {
+      // 使用 LayoutBuilder 获取实际可用区域，避免 MediaQuery 包含导航栏高度
+      final w = constraints.maxWidth;
+      final h = constraints.maxHeight;
 
-    return GestureDetector(
-      onPanStart: (d) {
-        _stopInertia();
-        _dragStartGX = d.globalPosition.dx;
-        _dragStartGY = d.globalPosition.dy;
-        _rotXStart = _rotX;
-        _rotYStart = _rotY;
-      },
-      onPanUpdate: (d) {
-        setState(() {
-          final dx = d.globalPosition.dx - _dragStartGX;
-          final dy = d.globalPosition.dy - _dragStartGY;
-          _rotX = (_rotXStart + dy / size.height * pi * 0.6)
-              .clamp(-pi / 2.2, pi / 2.2);
-          _rotY = _rotYStart + dx / size.width * pi * 0.8;
-        });
-      },
-      onPanEnd: (d) {
-        final vx = d.velocity.pixelsPerSecond.dy / size.height * pi * 0.6;
-        final vy = d.velocity.pixelsPerSecond.dx / size.width * pi * 0.8;
+      // 球半径：取宽高较小值的 42%，确保地球完整显示在屏幕内
+      _globeR = (w < h ? w : h) * 0.42;
+      // 球心：水平居中，垂直居中偏上一点（留出底部气泡卡片空间）
+      _globeCenter = Offset(w / 2, h * 0.46);
 
-        const drag = 2.5;
-
-        if (vx.abs() > 0.05) {
-          _simX = FrictionSimulation(drag, _rotX, vx);
-          _inertiaX
-            ..value = 0
-            ..animateWith(_simX!);
-        }
-        if (vy.abs() > 0.05) {
-          _simY = FrictionSimulation(drag, _rotY, vy);
-          _inertiaY
-            ..value = 0
-            ..animateWith(_simY!);
-        }
-      },
-      child: Stack(
-        children: [
-          Positioned.fill(child: _StarfieldBg()),
-
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _GlobePainter(rotX: _rotX, rotY: _rotY),
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (d) {
+          _isDragging = true;
+          _vX = 0;
+          _vY = 0;
+          _startGX = d.globalPosition.dx;
+          _startGY = d.globalPosition.dy;
+          _rotXStart = _rotX;
+          _rotYStart = _rotY;
+        },
+        onPanUpdate: (d) {
+          setState(() {
+            final dx = d.globalPosition.dx - _startGX;
+            final dy = d.globalPosition.dy - _startGY;
+            _rotX = (_rotXStart + dy / h * pi * 0.75)
+                .clamp(-pi / 2.05, pi / 2.05);
+            _rotY = _rotYStart + dx / w * pi * 1.0;
+          });
+        },
+        onPanEnd: (d) {
+          _isDragging = false;
+          _vX = d.velocity.pixelsPerSecond.dy / h * pi * 2.8;
+          _vY = d.velocity.pixelsPerSecond.dx / w * pi * 2.8;
+          _lastTickTime = null;
+        },
+        child: Stack(
+          children: [
+            // ① 星空背景
+            const Positioned.fill(
+              child: RepaintBoundary(child: _StarfieldBg()),
             ),
-          ),
 
-          ..._buildMarkers(center, globeR),
-
-          Positioned(
-            bottom: 32,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Text(
-                '拖动旋转地球  探索全球 AI 伙伴',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.7),
-                  letterSpacing: 0.5,
+            // ② 地球球体（经纬线 + 光晕）
+            Positioned(
+              left: _globeCenter.dx - _globeR,
+              top: _globeCenter.dy - _globeR,
+              child: SizedBox(
+                width: _globeR * 2,
+                height: _globeR * 2,
+                child: CustomPaint(
+                  painter: _GlobeBodyPainter(
+                    rotX: _rotX,
+                    rotY: _rotY,
+                    radius: _globeR,
+                  ),
                 ),
               ),
-            ).animate().fadeIn(delay: 600.ms, duration: 600.ms),
-          ),
+            ),
 
-          if (_selected != null) _buildBubbleCard(_selected!),
-        ],
-      ),
-    );
+            // ③ 球面头像标记
+            ..._buildMarkers(_globeCenter, _globeR),
+
+            // ④ 底部提示
+            Positioned(
+              bottom: 20,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  '拖动旋转  探索全球 AI 伙伴',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: StarpathColors.onSurfaceVariant
+                        .withValues(alpha: 0.55),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ).animate().fadeIn(delay: 800.ms, duration: 600.ms),
+            ),
+
+          // ⑤ 气泡卡片（AnimatedSwitcher 包裹，仅在 selected 变化时播动画）
+          Positioned(
+            top: 68,
+            left: 16,
+            right: 16,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, -0.08),
+                    end: Offset.zero,
+                  ).animate(anim),
+                  child: child,
+                ),
+              ),
+              child: _selected != null
+                  ? _buildBubbleCard(_selected!, key: ValueKey(_selected!.id))
+                  : const SizedBox.shrink(key: ValueKey('empty')),
+            ),
+          ),
+          ],
+        ),
+      );
+    });
   }
 
-  // ── Markers ───────────────────────────────────────────────────────────────
+  // ── 标记点列表 ────────────────────────────────────────────────────────────
 
   List<Widget> _buildMarkers(Offset center, double globeR) {
     final projected = <({GlobeAgent agent, Offset pos, double depth})>[];
 
     for (final agent in _mockAgents) {
-      final r = _project(agent, center, globeR);
+      final r = _project(agent.lat, agent.lng, center, globeR);
       if (r == null) continue;
-      if (r.depth < 0.08) continue; // 过滤极边缘点，避免贴轮廓线
+      if (r.depth < 0.06) continue;
       projected.add((agent: agent, pos: r.pos, depth: r.depth));
     }
 
     projected.sort((a, b) => a.depth.compareTo(b.depth));
 
     return projected.map((p) {
-      final scale = 0.55 + p.depth * 0.55;
-      final opacity = 0.35 + p.depth * 0.65;
+      final scale = 0.32 + p.depth * 0.68;
+      final opacity = (0.18 + p.depth * 0.82).clamp(0.0, 1.0);
+      final isSelected = _selected?.id == p.agent.id;
 
       return Positioned(
         left: p.pos.dx,
         top: p.pos.dy,
         child: FractionalTranslation(
-          translation: const Offset(-0.5, -1.0),
-          child: GestureDetector(
-            onTap: () => setState(
-              () => _selected = _selected?.id == p.agent.id ? null : p.agent,
-            ),
-            child: Opacity(
-              opacity: opacity,
-              child: Transform.scale(
-                scale: scale,
-                alignment: Alignment.bottomCenter,
-                child: _AgentMarker(
-                  agent: p.agent,
-                  avatarSize: 38,
-                  selected: _selected?.id == p.agent.id,
+          translation: const Offset(-0.5, -0.5),
+          child: Opacity(
+            opacity: opacity,
+            child: Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: RepaintBoundary(
+                child: GestureDetector(
+                  onTap: () => setState(
+                    () => _selected = isSelected ? null : p.agent,
+                  ),
+                  child: _SoulMarker(
+                    agent: p.agent,
+                    selected: isSelected,
+                  ),
                 ),
               ),
             ),
@@ -280,13 +329,12 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     }).toList();
   }
 
-  // ── AI 伙伴气泡卡片 ──────────────────────────────────────────────────────────
+  // ── AI 伙伴气泡卡片 ───────────────────────────────────────────────────────
 
   static const _companionNames = [
-    '星辰', 'Nova AI', '灵感缪斯', 'Lumina', '幻想家',
-    '引路人', 'Aura', '智能先锋', '漫游者', 'Oracle',
-    '创作精灵', 'Spark', '深海之声', 'Nexus', '光影师',
-    '量子', 'Aria', '旅行家', '极光', '梦境编织者',
+    '星辰', 'Nova AI', '灵感缪斯', 'Lumina', '幻想家', '引路人', 'Aura', '智能先锋',
+    '漫游者', 'Oracle', '创作精灵', 'Spark', '深海之声', 'Nexus', '光影师', '量子',
+    'Aria', '旅行家', '极光', '梦境编织者',
   ];
 
   static const _companionDescs = [
@@ -312,526 +360,233 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     '未来预测家，洞察时代的脉搏',
   ];
 
-  Widget _buildBubbleCard(GlobeAgent agent) {
+  Widget _buildBubbleCard(GlobeAgent agent, {Key? key}) {
     final idx = agent.id.hashCode.abs() % _companionNames.length;
     final companionName = _companionNames[idx];
     final companionDesc = _companionDescs[idx];
-    final companionSeed = 'companion_${agent.id}';
-    final companionUser = UserBrief(id: companionSeed, nickname: companionName);
-    final companionAvatarUrl =
-        'https://api.dicebear.com/9.x/adventurer/png?seed=$companionSeed&size=160';
+    // pravatar.cc img 参数 1-70，用 idx+1 循环确保稳定加载
+    final avatarUrl = 'https://i.pravatar.cc/128?img=${(idx % 70) + 1}';
 
-    return Positioned(
-      bottom: 80,
-      left: 20,
-      right: 20,
-      child: GestureDetector(
-        onTap: () {}, // 点卡片内部不消失
-        child: Container(
-          decoration: BoxDecoration(
-            color: StarpathColors.surfaceContainer.withValues(alpha: 0.97),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: StarpathColors.primary.withValues(alpha: 0.25),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: StarpathColors.primary.withValues(alpha: 0.25),
-                blurRadius: 32,
-                offset: const Offset(0, 10),
-              ),
-            ],
+    return Container(
+      key: key,
+      decoration: BoxDecoration(
+          color: StarpathColors.surfaceContainer.withValues(alpha: 0.97),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: StarpathColors.primary.withValues(alpha: 0.22),
+            width: 1,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // ── 关闭按钮 ──────────────────────────────────────────────────
-              Align(
-                alignment: Alignment.topRight,
-                child: GestureDetector(
-                  onTap: () => setState(() => _selected = null),
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 10, right: 12),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 18,
-                      color: StarpathColors.onSurfaceVariant
-                          .withValues(alpha: 0.6),
-                    ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C3AED).withValues(alpha: 0.30),
+              blurRadius: 32,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 关闭按钮
+            Align(
+              alignment: Alignment.topRight,
+              child: GestureDetector(
+                onTap: () => setState(() => _selected = null),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 10, right: 12),
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 18,
+                    color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.6),
                   ),
                 ),
               ),
-              // ── 顶部：AI 伙伴头像 + 名称 + 徽章 ──────────────────────────
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.network(
-                        companionAvatarUrl,
+            ),
+            // 头像 + 名称 + 描述
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(
+                      avatarUrl,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
                         width: 56,
                         height: 56,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => UserAvatar(
-                          user: companionUser,
-                          size: 56,
-                          useRandomAvatar: true,
-                          cornerRatio: 0.25,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          gradient: StarpathColors.primaryGradient,
+                        ),
+                        child: Center(
+                          child: Text(
+                            companionName.characters.first,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  companionName,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: StarpathColors.onSurface,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 7, vertical: 2),
-                                decoration: BoxDecoration(
-                                  gradient: StarpathColors.primaryGradient,
-                                  borderRadius: BorderRadius.circular(100),
-                                ),
-                                child: const Text(
-                                  'AI 伙伴',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            companionDesc,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: StarpathColors.onSurfaceVariant,
-                              height: 1.4,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ── 分割线 ────────────────────────────────────────────────────
-              Divider(
-                height: 1,
-                thickness: 1,
-                color: StarpathColors.outlineVariant.withValues(alpha: 0.15),
-              ),
-              // ── 底部：创建者 + 前往聊天 ────────────────────────────────────
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
-                  children: [
-                    UserAvatar(
-                      user: agent.userBrief,
-                      size: 28,
-                      useRandomAvatar: true,
-                      cornerRatio: 0.4,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            agent.name,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: StarpathColors.onSurface,
-                            ),
-                          ),
-                          Row(
-                            children: [
-                              const Icon(
-                                Icons.location_on_rounded,
-                                size: 11,
-                                color: StarpathColors.primary,
-                              ),
-                              const SizedBox(width: 2),
-                              Text(
-                                agent.city,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                companionName,
                                 style: const TextStyle(
-                                  fontSize: 11,
-                                  color: StarpathColors.onSurfaceVariant,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: StarpathColors.onSurface,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                gradient: StarpathColors.primaryGradient,
+                                borderRadius: BorderRadius.circular(100),
+                              ),
+                              child: const Text(
+                                'AI 伙伴',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
                                 ),
                               ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () {},
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 9),
-                        decoration: BoxDecoration(
-                          gradient: StarpathColors.primaryGradient,
-                          borderRadius: BorderRadius.circular(100),
-                          boxShadow: [
-                            BoxShadow(
-                              color: StarpathColors.primary
-                                  .withValues(alpha: 0.4),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
                             ),
                           ],
                         ),
-                        child: const Text(
-                          '前往聊天',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                        const SizedBox(height: 5),
+                        Text(
+                          companionDesc,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: StarpathColors.onSurfaceVariant,
+                            height: 1.4,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+              height: 1,
+              thickness: 1,
+              color: StarpathColors.outlineVariant.withValues(alpha: 0.15),
+            ),
+            // 用户信息行 + 前往聊天
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  UserAvatar(
+                    user: agent.userBrief,
+                    size: 28,
+                    useRandomAvatar: true,
+                    cornerRatio: 0.4,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          agent.name,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: StarpathColors.onSurface,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on_rounded,
+                                size: 11, color: StarpathColors.primary),
+                            const SizedBox(width: 2),
+                            Text(
+                              agent.city,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: StarpathColors.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {},
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 9),
+                      decoration: BoxDecoration(
+                        gradient: StarpathColors.primaryGradient,
+                        borderRadius: BorderRadius.circular(100),
+                        boxShadow: [
+                          BoxShadow(
+                            color: StarpathColors.primary.withValues(alpha: 0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: const Text(
+                        '前往聊天',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        )
-            .animate()
-            .fadeIn(duration: 220.ms)
-            .slideY(begin: 0.15, duration: 220.ms, curve: Curves.easeOutCubic),
-      ),
-    );
-  }
-}
-
-// ── Agent Marker Widget ───────────────────────────────────────────────────────
-
-class _AgentMarker extends StatelessWidget {
-  final GlobeAgent agent;
-  final double avatarSize;
-  final bool selected;
-
-  const _AgentMarker({
-    required this.agent,
-    required this.avatarSize,
-    required this.selected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(2.5),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: selected
-                ? StarpathColors.primaryGradient
-                : LinearGradient(
-                    colors: [
-                      StarpathColors.primary.withValues(alpha: 0.7),
-                      StarpathColors.secondary.withValues(alpha: 0.5),
-                    ],
                   ),
-            boxShadow: [
-              BoxShadow(
-                color: StarpathColors.primary
-                    .withValues(alpha: selected ? 0.8 : 0.45),
-                blurRadius: selected ? 18 : 10,
-                spreadRadius: selected ? 2 : 0,
+                ],
               ),
-            ],
-          ),
-          child: ClipOval(
-            child: UserAvatar(
-              user: agent.userBrief,
-              size: avatarSize,
-              useRandomAvatar: true,
-              cornerRatio: 0.5,
             ),
-          ),
+          ],
         ),
-        const SizedBox(height: 3),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: StarpathColors.surfaceContainer.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(100),
-            border: Border.all(
-              color: StarpathColors.primary.withValues(alpha: 0.25),
-              width: 0.8,
-            ),
-          ),
-          child: Text(
-            agent.name,
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: StarpathColors.onSurface,
-              height: 1.2,
-            ),
-          ),
-        ),
-        // 针尖 — 底部锚定到球面点
-        Container(
-          width: 2,
-          height: 8,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                StarpathColors.primary.withValues(alpha: 0.8),
-                Colors.transparent,
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
 
-// ── Globe CustomPainter ───────────────────────────────────────────────────────
+// ── 地球球体 CustomPainter ────────────────────────────────────────────────────
 
-class _GlobePainter extends CustomPainter {
+class _GlobeBodyPainter extends CustomPainter {
   final double rotX;
   final double rotY;
+  final double radius;
 
-  const _GlobePainter({required this.rotX, required this.rotY});
+  const _GlobeBodyPainter({
+    required this.rotX,
+    required this.rotY,
+    required this.radius,
+  });
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height * 0.42;
-    final center = Offset(cx, cy);
-    final r = size.width * 0.42;
+  Offset? _proj(double latR, double lngR) {
+    final cx = radius, cy = radius;
+    final r = radius;
 
-    // 裁剪球体区域（确保网格/大陆不溢出）
-    canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: r)));
-
-    // 1. 外发光
-    final outerGlow = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0xFF7B4FC8).withValues(alpha: 0.0),
-          const Color(0xFF4A1A8A).withValues(alpha: 0.35),
-          Colors.transparent,
-        ],
-        stops: const [0.55, 0.78, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: r * 1.45));
-    canvas.restore();
-    canvas.drawCircle(center, r * 1.45, outerGlow);
-
-    // 重新裁剪
-    canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: r)));
-
-    // 2. 球体渐变主体
-    final bodyPaint = Paint()
-      ..shader = const RadialGradient(
-        center: Alignment(-0.35, -0.4),
-        radius: 1.0,
-        colors: [
-          Color(0xFFB07AE8),
-          Color(0xFF7B4FC8),
-          Color(0xFF4A20A0),
-          Color(0xFF1E0A52),
-        ],
-        stops: [0.0, 0.38, 0.70, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: r));
-    canvas.drawCircle(center, r, bodyPaint);
-
-    // 3. 极淡经纬网格
-    _drawGrid(canvas, center, r);
-
-    // 4. 大陆轮廓
-    _drawContinents(canvas, center, r);
-
-    // 5. 球体边缘暗化
-    final edgePaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          Colors.transparent,
-          Colors.transparent,
-          Colors.black.withValues(alpha: 0.45),
-        ],
-        stops: const [0.0, 0.72, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: r));
-    canvas.drawCircle(center, r, edgePaint);
-
-    // 6. 高光
-    final highlightPaint = Paint()
-      ..shader = RadialGradient(
-        center: const Alignment(-0.5, -0.55),
-        radius: 0.55,
-        colors: [
-          Colors.white.withValues(alpha: 0.18),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromCircle(center: center, radius: r));
-    canvas.drawCircle(center, r, highlightPaint);
-
-    canvas.restore();
-  }
-
-  // ── 经纬网格（极淡） ───────────────────────────────────────────────────────
-
-  void _drawGrid(Canvas canvas, Offset center, double r) {
-    final gridPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.4
-      ..color = StarpathColors.primary.withValues(alpha: 0.08);
-
-    for (int lng = 0; lng < 360; lng += 30) {
-      final lngR = lng * pi / 180;
-      final path = Path();
-      bool first = true;
-      for (int lat = -90; lat <= 90; lat += 4) {
-        final latR = lat * pi / 180;
-        final pt = _projectPoint(latR, lngR, center, r);
-        if (pt == null) {
-          first = true;
-          continue;
-        }
-        if (first) {
-          path.moveTo(pt.dx, pt.dy);
-          first = false;
-        } else {
-          path.lineTo(pt.dx, pt.dy);
-        }
-      }
-      canvas.drawPath(path, gridPaint);
-    }
-
-    for (int lat = -60; lat <= 60; lat += 30) {
-      final latR = lat * pi / 180;
-      final path = Path();
-      bool first = true;
-      for (int lng = 0; lng <= 360; lng += 4) {
-        final lngR = lng * pi / 180;
-        final pt = _projectPoint(latR, lngR, center, r);
-        if (pt == null) {
-          first = true;
-          continue;
-        }
-        if (first) {
-          path.moveTo(pt.dx, pt.dy);
-          first = false;
-        } else {
-          path.lineTo(pt.dx, pt.dy);
-        }
-      }
-      canvas.drawPath(path, gridPaint);
-    }
-  }
-
-  // ── 大陆轮廓 ──────────────────────────────────────────────────────────────
-
-  void _drawContinents(Canvas canvas, Offset center, double r) {
-    final fillPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..color = const Color(0xFFCC97FF).withValues(alpha: 0.45);
-    final strokePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
-      ..color = const Color(0xFFE8C4FF).withValues(alpha: 0.65);
-
-    for (final continent in _continents) {
-      _drawOneContinent(canvas, center, r, continent, fillPaint, strokePaint);
-    }
-  }
-
-  void _drawOneContinent(
-    Canvas canvas,
-    Offset center,
-    double r,
-    List<(double, double)> points,
-    Paint fill,
-    Paint stroke,
-  ) {
-    if (points.length < 3) return;
-
-    // 检测该大陆是否有任何可见点
-    final projected = <Offset>[];
-    bool anyVisible = false;
-    for (final (lat, lng) in points) {
-      final pt = _projectPoint(lat * pi / 180, lng * pi / 180, center, r);
-      if (pt != null) {
-        projected.add(pt);
-        anyVisible = true;
-      } else {
-        // 背面点也取边缘近似，防止大陆被截成锯齿
-        projected.add(_projectPointClamped(lat * pi / 180, lng * pi / 180, center, r));
-      }
-    }
-    if (!anyVisible) return;
-
-    final path = Path()..moveTo(projected[0].dx, projected[0].dy);
-    for (int i = 1; i < projected.length; i++) {
-      path.lineTo(projected[i].dx, projected[i].dy);
-    }
-    path.close();
-
-    canvas.drawPath(path, fill);
-    canvas.drawPath(path, stroke);
-  }
-
-  /// 和 _projectPoint 相同，但 z < 0 时不返回 null，
-  /// 而是把点推到球体边缘（夹到赤道圈上）。
-  Offset _projectPointClamped(
-      double latR, double lngR, Offset center, double r) {
-    double x0 = cos(latR) * sin(lngR);
-    double y0 = sin(latR);
-    double z0 = cos(latR) * cos(lngR);
-
-    final cosX = cos(rotX), sinX = sin(rotX);
-    final y1 = y0 * cosX - z0 * sinX;
-    final z1 = y0 * sinX + z0 * cosX;
-
-    final cosY = cos(rotY), sinY = sin(rotY);
-    final x2 = x0 * cosY + z1 * sinY;
-    final z2 = -x0 * sinY + z1 * cosY;
-
-    if (z2 >= 0) {
-      return Offset(center.dx + x2 * r, center.dy - y1 * r);
-    }
-
-    // 背面：投射到球体视觉边缘
-    final len = sqrt(x2 * x2 + y1 * y1);
-    if (len < 0.001) return center;
-    final nx = x2 / len;
-    final ny = -y1 / len;
-    return Offset(center.dx + nx * r, center.dy + ny * r);
-  }
-
-  Offset? _projectPoint(double latR, double lngR, Offset center, double r) {
     double x0 = cos(latR) * sin(lngR);
     double y0 = sin(latR);
     double z0 = cos(latR) * cos(lngR);
@@ -845,129 +600,353 @@ class _GlobePainter extends CustomPainter {
     final z2 = -x0 * sinY + z1 * cosY;
 
     if (z2 < 0) return null;
-    return Offset(center.dx + x2 * r, center.dy - y1 * r);
+    return Offset(cx + x2 * r, cy - y1 * r);
+  }
+
+  // ── 紫色系调色板 ─────────────────────────────────────────────────────────
+  static const _purpleDeep   = Color(0xFF0D0520); // 极深紫黑，球心暗部
+  static const _purpleMid    = Color(0xFF1E0A4A); // 中深紫
+  static const _purpleLight  = Color(0xFF3D1A8A); // 亮侧紫
+  static const _violet       = Color(0xFF7C3AED); // 紫色网格线
+  static const _violetBright = Color(0xFF9B5FFF); // 赤道加强线
+  static const _pinkPurple   = Color(0xFFD175FF); // 极地光晕
+  static const _outerGlow1   = Color(0xFF8B3FE8); // 大气外发光核心
+  static const _outerGlow2   = Color(0xFFB76EFF); // 大气外发光边缘
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(radius, radius);
+    final r = radius;
+    final rect = Rect.fromCircle(center: center, radius: r);
+
+    // ── ① 外发光（弱化：减小范围和透明度）──────────────────────────────────
+    canvas.drawCircle(
+      center,
+      r * 1.28,
+      Paint()
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 28)
+        ..color = _outerGlow1.withValues(alpha: 0.14),
+    );
+    canvas.drawCircle(
+      center,
+      r * 1.08,
+      Paint()
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12)
+        ..color = _outerGlow2.withValues(alpha: 0.22),
+    );
+
+    // ── ② 以下内容裁剪在球体内 ────────────────────────────────────────────
+    canvas.save();
+    canvas.clipPath(Path()..addOval(rect));
+
+    // 深紫渐变底色：从左上亮紫 → 右下极深紫黑
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(-0.30, -0.38),
+          radius: 1.30,
+          colors: const [
+            _purpleLight,
+            _purpleMid,
+            _purpleDeep,
+          ],
+          stops: const [0.0, 0.50, 1.0],
+        ).createShader(rect),
+    );
+
+    // 球内底部反光：让底部有一圈紫粉透光感
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(0.3, 0.75),
+          radius: 0.70,
+          colors: [
+            _pinkPurple.withValues(alpha: 0.18),
+            Colors.transparent,
+          ],
+        ).createShader(rect),
+    );
+
+    // 纬线（每 30°）
+    _drawLatLines(canvas, center, r);
+
+    // 经线（每 30°）
+    _drawLngLines(canvas, center, r);
+
+    // 赤道加粗
+    _drawEquator(canvas, center, r);
+
+    // 极地光晕
+    _drawPolarGlow(canvas, center, r);
+
+    // 镜面高光（左上白色反光）
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(-0.55, -0.60),
+          radius: 0.50,
+          colors: [
+            Colors.white.withValues(alpha: 0.26),
+            Colors.white.withValues(alpha: 0.05),
+            Colors.transparent,
+          ],
+          stops: const [0.0, 0.35, 1.0],
+        ).createShader(rect),
+    );
+
+    canvas.restore();
+
+    // ── ③ 边缘暗边：加深轮廓，增加球体立体感 ─────────────────────────────
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.055
+        ..shader = RadialGradient(
+          radius: 1.0,
+          colors: [
+            Colors.transparent,
+            _purpleDeep.withValues(alpha: 0.88),
+          ],
+          stops: const [0.82, 1.0],
+        ).createShader(rect),
+    );
+  }
+
+  void _drawLatLines(Canvas canvas, Offset center, double r) {
+    // 主纬线每 20°，高亮
+    final mainPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7
+      ..color = _violet.withValues(alpha: 0.55)
+      ..isAntiAlias = true;
+    // 细分纬线每 10°（主纬线之间），稍暗
+    final subPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.45
+      ..color = _violet.withValues(alpha: 0.28)
+      ..isAntiAlias = true;
+
+    for (var latDeg = -80; latDeg <= 80; latDeg += 10) {
+      final isMain = latDeg % 20 == 0;
+      _drawLatCircle(canvas, latDeg * pi / 180, isMain ? mainPaint : subPaint);
+    }
+  }
+
+  void _drawLatCircle(Canvas canvas, double latR, Paint paint) {
+    final path = Path();
+    bool drawing = false;
+    for (var lngDeg = -180; lngDeg <= 182; lngDeg += 2) {
+      final p = _proj(latR, lngDeg * pi / 180);
+      if (p == null) { drawing = false; continue; }
+      if (!drawing) { path.moveTo(p.dx, p.dy); drawing = true; }
+      else { path.lineTo(p.dx, p.dy); }
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawLngLines(Canvas canvas, Offset center, double r) {
+    // 主经线每 20°
+    final mainPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7
+      ..color = _violet.withValues(alpha: 0.48)
+      ..isAntiAlias = true;
+    // 细分经线每 10°
+    final subPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.45
+      ..color = _violet.withValues(alpha: 0.24)
+      ..isAntiAlias = true;
+
+    for (var lngDeg = -180; lngDeg < 180; lngDeg += 10) {
+      final isMain = lngDeg % 20 == 0;
+      _drawLngCircle(canvas, lngDeg * pi / 180, isMain ? mainPaint : subPaint);
+    }
+  }
+
+  void _drawLngCircle(Canvas canvas, double lngR, Paint paint) {
+    final path = Path();
+    bool drawing = false;
+    for (var latDeg = -90; latDeg <= 92; latDeg += 2) {
+      final p = _proj(latDeg * pi / 180, lngR);
+      if (p == null) { drawing = false; continue; }
+      if (!drawing) { path.moveTo(p.dx, p.dy); drawing = true; }
+      else { path.lineTo(p.dx, p.dy); }
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawEquator(Canvas canvas, Offset center, double r) {
+    // 赤道：外层柔光 + 内层亮线
+    final glowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..color = _violetBright.withValues(alpha: 0.30)
+      ..isAntiAlias = true;
+    _drawLatCircle(canvas, 0, glowPaint);
+
+    final corePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = _violetBright.withValues(alpha: 0.88)
+      ..isAntiAlias = true;
+    _drawLatCircle(canvas, 0, corePaint);
+  }
+
+  void _drawPolarGlow(Canvas canvas, Offset center, double r) {
+    for (final entry in [(pi / 2, 0.60), (-pi / 2, 0.45)]) {
+      final p = _proj(entry.$1, 0);
+      if (p == null) continue;
+      canvas.drawCircle(
+        p,
+        r * 0.12,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              _pinkPurple.withValues(alpha: entry.$2),
+              Colors.transparent,
+            ],
+          ).createShader(Rect.fromCircle(center: p, radius: r * 0.12)),
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(_GlobePainter old) =>
+  bool shouldRepaint(_GlobeBodyPainter old) =>
       old.rotX != rotX || old.rotY != rotY;
 }
 
-// ── 简化七大洲海岸线数据 (lat, lng) ──────────────────────────────────────────
+// ── Soul App 风格头像标记 ──────────────────────────────────────────────────────
 
-const List<List<(double, double)>> _continents = [
-  _northAmerica,
-  _southAmerica,
-  _europe,
-  _africa,
-  _asia,
-  _oceania,
-  _middleEast,
-];
+class _SoulMarker extends StatelessWidget {
+  final GlobeAgent agent;
+  final bool selected;
 
-const _northAmerica = <(double, double)>[
-  (49.0, -125.0), (60.0, -140.0), (65.0, -168.0), (71.0, -157.0),
-  (71.5, -130.0), (62.0, -114.0), (60.0, -95.0), (63.0, -82.0),
-  (55.0, -77.0), (52.0, -56.0), (47.0, -53.0), (45.0, -66.0),
-  (42.0, -70.0), (35.0, -75.0), (25.0, -80.0), (25.5, -97.0),
-  (20.0, -105.0), (15.0, -92.0), (15.0, -83.0), (10.0, -84.0),
-  (8.0, -77.0), (19.0, -104.0), (23.0, -110.0), (31.0, -115.0),
-  (38.0, -123.0), (48.0, -124.0), (49.0, -125.0),
-];
+  static const double _avatarSize = 42;
 
-const _southAmerica = <(double, double)>[
-  (12.0, -72.0), (8.0, -77.0), (4.0, -77.5), (-1.0, -80.0),
-  (-5.0, -81.0), (-15.0, -75.0), (-18.0, -70.5), (-23.0, -70.0),
-  (-28.0, -71.0), (-33.0, -72.0), (-40.0, -73.0), (-46.0, -75.0),
-  (-52.0, -70.0), (-55.0, -68.0), (-55.0, -65.0), (-48.0, -65.0),
-  (-41.0, -63.0), (-36.0, -57.0), (-33.0, -52.0), (-23.0, -43.0),
-  (-13.0, -38.5), (-5.0, -35.0), (-1.0, -50.0), (5.0, -52.0),
-  (7.0, -60.0), (10.0, -62.0), (11.0, -72.0), (12.0, -72.0),
-];
-
-const _europe = <(double, double)>[
-  (36.0, -6.0), (37.0, -1.0), (43.0, 3.0), (44.0, 9.0),
-  (46.0, 14.0), (45.0, 19.0), (42.0, 19.0), (39.0, 20.0),
-  (35.0, 24.0), (39.0, 26.0), (41.0, 29.0), (43.0, 28.0),
-  (46.0, 30.0), (48.0, 24.0), (54.0, 20.0), (55.0, 28.0),
-  (60.0, 30.0), (64.0, 28.0), (70.0, 27.0), (71.0, 25.0),
-  (68.0, 14.0), (63.0, 11.0), (58.0, 6.0), (56.0, 8.0),
-  (54.0, 8.0), (52.0, 5.0), (51.0, 2.0), (48.0, -5.0),
-  (43.5, -8.0), (38.0, -9.5), (36.0, -6.0),
-];
-
-const _africa = <(double, double)>[
-  (35.0, -1.0), (37.0, 10.0), (33.0, 12.0), (32.0, 24.0),
-  (31.0, 32.0), (22.0, 36.0), (12.0, 43.0), (2.0, 42.0),
-  (-2.0, 41.0), (-11.0, 40.0), (-15.0, 40.5), (-25.0, 35.0),
-  (-34.0, 26.0), (-34.5, 18.0), (-29.0, 16.5), (-22.0, 14.0),
-  (-17.0, 12.0), (-13.0, 13.0), (-5.0, 12.0), (5.0, 10.0),
-  (6.0, 1.0), (5.0, -4.0), (4.0, -7.5), (8.0, -13.0),
-  (12.0, -16.0), (15.0, -17.0), (21.0, -17.0), (27.0, -13.0),
-  (32.0, -5.0), (35.0, -1.0),
-];
-
-const _asia = <(double, double)>[
-  (42.0, 30.0), (43.0, 40.0), (39.0, 44.0), (37.0, 50.0),
-  (25.0, 56.0), (24.0, 58.0), (22.0, 60.0), (25.0, 62.0),
-  (25.0, 68.0), (28.0, 73.0), (23.0, 78.0), (22.0, 88.0),
-  (20.0, 93.0), (17.0, 96.0), (10.0, 99.0), (1.0, 104.0),
-  (7.0, 117.0), (22.0, 114.0), (26.0, 120.0), (30.0, 122.0),
-  (35.0, 129.0), (39.0, 128.0), (43.0, 132.0), (46.0, 143.0),
-  (54.0, 143.0), (59.0, 150.0), (60.0, 163.0), (65.0, 171.0),
-  (70.0, 170.0), (72.0, 140.0), (73.0, 120.0), (71.0, 80.0),
-  (68.0, 60.0), (62.0, 50.0), (55.0, 40.0), (48.0, 38.0),
-  (42.0, 30.0),
-];
-
-const _oceania = <(double, double)>[
-  (-11.0, 132.0), (-14.0, 127.0), (-21.0, 114.0), (-31.0, 115.0),
-  (-35.0, 117.0), (-35.0, 138.0), (-38.0, 145.0), (-37.0, 150.0),
-  (-28.0, 153.5), (-24.0, 152.0), (-19.0, 147.0), (-16.0, 146.0),
-  (-12.0, 142.0), (-11.0, 132.0),
-];
-
-const _middleEast = <(double, double)>[
-  (31.5, 34.0), (29.5, 34.8), (22.0, 36.0), (13.0, 43.0),
-  (12.0, 45.0), (15.0, 52.0), (22.0, 56.0), (24.0, 56.0),
-  (26.0, 51.0), (27.0, 50.0), (30.0, 48.0), (30.5, 47.5),
-  (33.0, 44.0), (37.0, 42.0), (37.0, 36.0), (35.0, 36.0),
-  (33.0, 35.5), (31.5, 34.0),
-];
-
-// ── Starfield Background ──────────────────────────────────────────────────────
-
-class _StarfieldBg extends StatelessWidget {
-  final List<({Offset pos, double size, double opacity})> _stars;
-
-  _StarfieldBg() : _stars = _generateStars();
-
-  static List<({Offset pos, double size, double opacity})> _generateStars() {
-    final rng = Random(777);
-    return List.generate(120, (_) {
-      return (
-        pos: Offset(rng.nextDouble(), rng.nextDouble()),
-        size: 0.8 + rng.nextDouble() * 2.0,
-        opacity: 0.2 + rng.nextDouble() * 0.7,
-      );
-    });
-  }
+  const _SoulMarker({required this.agent, required this.selected});
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _StarfieldPainter(stars: _stars),
+    final color = StarpathColors.avatarAccentFor(agent.id);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: _avatarSize + (selected ? 6 : 0),
+          height: _avatarSize + (selected ? 6 : 0),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected
+                  ? StarpathColors.primary
+                  : color.withValues(alpha: 0.6),
+              width: selected ? 2.5 : 1.5,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: StarpathColors.primary.withValues(alpha: 0.55),
+                      blurRadius: 14,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.35),
+                      blurRadius: 6,
+                    )
+                  ],
+          ),
+          child: ClipOval(
+            child: UserAvatar(
+              user: agent.userBrief,
+              size: _avatarSize + (selected ? 6 : 0),
+              useRandomAvatar: true,
+              cornerRatio: 0.5,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          constraints: const BoxConstraints(maxWidth: 64),
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          decoration: BoxDecoration(
+            color: StarpathColors.surfaceContainer.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            agent.name,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w500,
+              color: selected
+                  ? StarpathColors.primary
+                  : StarpathColors.onSurface.withValues(alpha: 0.9),
+              height: 1.2,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _StarfieldPainter extends CustomPainter {
-  final List<({Offset pos, double size, double opacity})> stars;
+// ── Starfield Background ──────────────────────────────────────────────────────
 
-  const _StarfieldPainter({required this.stars});
+class _StarfieldBg extends StatelessWidget {
+  const _StarfieldBg();
+
+  static final List<({Offset pos, double size, double opacity})> _stars =
+      _generate();
+
+  static List<({Offset pos, double size, double opacity})> _generate() {
+    final rng = Random(42);
+    return List.generate(
+      150,
+      (_) => (
+        pos: Offset(rng.nextDouble(), rng.nextDouble()),
+        size: 0.6 + rng.nextDouble() * 1.8,
+        opacity: 0.15 + rng.nextDouble() * 0.65,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(painter: _StarPainter(_stars));
+  }
+}
+
+class _StarPainter extends CustomPainter {
+  final List<({Offset pos, double size, double opacity})> stars;
+  const _StarPainter(this.stars);
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF0D0318), Color(0xFF180720), Color(0xFF100520)],
+          stops: [0.0, 0.5, 1.0],
+        ).createShader(Offset.zero & size),
+    );
+
     final paint = Paint()..isAntiAlias = true;
     for (final s in stars) {
       paint.color = Colors.white.withValues(alpha: s.opacity);
@@ -980,5 +959,5 @@ class _StarfieldPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_StarfieldPainter old) => false;
+  bool shouldRepaint(_StarPainter old) => false;
 }
