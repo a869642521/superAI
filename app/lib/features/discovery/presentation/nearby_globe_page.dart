@@ -183,6 +183,10 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
 
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
+        // 点击空白区域关闭卡片
+        onTap: () {
+          if (_selected != null) setState(() => _selected = null);
+        },
         onPanStart: (d) {
           _isDragging = true;
           _vX = 0;
@@ -214,7 +218,59 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
               child: RepaintBoundary(child: _StarfieldBg()),
             ),
 
-            // ② 地球球体（经纬线 + 光晕）
+            // ② 顶部标题 — 居中于导航栏底部与地球顶部之间
+            Positioned(
+              top: (_globeCenter.dy - _globeR) * 0.18,
+              bottom: h - (_globeCenter.dy - _globeR) + 8,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ShaderMask(
+                      shaderCallback: (bounds) => const LinearGradient(
+                        colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ).createShader(bounds),
+                      child: const Text(
+                        '在全球寻找你的',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: 2.5,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    ShaderMask(
+                      shaderCallback: (bounds) => const LinearGradient(
+                        colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ).createShader(bounds),
+                      child: const Text(
+                        'Agent 伙伴',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: 2.0,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(duration: 700.ms).slideY(begin: -0.12, curve: Curves.easeOut),
+            ),
+
+            // ③ 地球球体（经纬线 + 光晕）
             Positioned(
               left: _globeCenter.dx - _globeR,
               top: _globeCenter.dy - _globeR,
@@ -231,10 +287,10 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
               ),
             ),
 
-            // ③ 球面头像标记
+            // ④ 球面头像标记
             ..._buildMarkers(_globeCenter, _globeR),
 
-            // ④ 底部提示
+            // ⑤ 底部提示
             Positioned(
               bottom: 20,
               left: 0,
@@ -252,28 +308,34 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
               ).animate().fadeIn(delay: 800.ms, duration: 600.ms),
             ),
 
-          // ⑤ 气泡卡片（AnimatedSwitcher 包裹，仅在 selected 变化时播动画）
+          // ⑥ 气泡卡片：水平居中，宽度随内容收缩（不拉满屏）
           Positioned(
             top: 68,
-            left: 16,
-            right: 16,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 260),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, anim) => FadeTransition(
-                opacity: anim,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, -0.08),
-                    end: Offset.zero,
-                  ).animate(anim),
-                  child: child,
+            left: 0,
+            right: 0,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 260),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, -0.08),
+                        end: Offset.zero,
+                      ).animate(anim),
+                      child: child,
+                    ),
+                  ),
+                  child: _selected != null
+                      ? _buildBubbleCard(_selected!,
+                          key: ValueKey(_selected!.id))
+                      : const SizedBox.shrink(key: ValueKey('empty')),
                 ),
               ),
-              child: _selected != null
-                  ? _buildBubbleCard(_selected!, key: ValueKey(_selected!.id))
-                  : const SizedBox.shrink(key: ValueKey('empty')),
             ),
           ),
           ],
@@ -360,16 +422,30 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     '未来预测家，洞察时代的脉搏',
   ];
 
+  /// 气泡卡片：正方形封面 + 固定水平内边距，总宽不随屏幕拉满
+  static const double _kBubbleCoverSide = 152.0;
+  static const double _kBubbleHPad = 14.0;
+  static const double _kBubbleCardWidth =
+      _kBubbleCoverSide + _kBubbleHPad * 2;
+
+  static const List<String> _kBubbleIpImages = [
+    'images/ip0.png', 'images/ip1.png', 'images/ip2.png', 'images/ip3.png',
+    'images/ip4.png', 'images/ip5.png', 'images/ip7.png',
+  ];
+
   Widget _buildBubbleCard(GlobeAgent agent, {Key? key}) {
     final idx = agent.id.hashCode.abs() % _companionNames.length;
     final companionName = _companionNames[idx];
     final companionDesc = _companionDescs[idx];
-    // pravatar.cc img 参数 1-70，用 idx+1 循环确保稳定加载
-    final avatarUrl = 'https://i.pravatar.cc/128?img=${(idx % 70) + 1}';
+    final ipImage = _kBubbleIpImages[idx % _kBubbleIpImages.length];
 
-    return Container(
-      key: key,
-      decoration: BoxDecoration(
+    return GestureDetector(
+      // 卡片内部点击不冒泡到外层（防止误触关闭）
+      onTap: () {},
+      child: Container(
+        key: key,
+        width: _kBubbleCardWidth,
+        decoration: BoxDecoration(
           color: StarpathColors.surfaceContainer.withValues(alpha: 0.97),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
@@ -386,148 +462,53 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 关闭按钮
-            Align(
-              alignment: Alignment.topRight,
-              child: GestureDetector(
-                onTap: () => setState(() => _selected = null),
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 10, right: 12),
-                  child: Icon(
-                    Icons.close_rounded,
-                    size: 18,
-                    color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ),
-            // 头像 + 名称 + 描述
+            // ── 顶部：头像 + 名称 + 地点（左）｜关闭按钮（右）──────
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              padding: const EdgeInsets.fromLTRB(
+                  _kBubbleHPad, _kBubbleHPad, _kBubbleHPad - 4, 10),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Image.network(
-                      avatarUrl,
-                      width: 56,
-                      height: 56,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        width: 56,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          gradient: StarpathColors.primaryGradient,
-                        ),
-                        child: Center(
-                          child: Text(
-                            companionName.characters.first,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                companionName,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: StarpathColors.onSurface,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                gradient: StarpathColors.primaryGradient,
-                                borderRadius: BorderRadius.circular(100),
-                              ),
-                              child: const Text(
-                                'AI 伙伴',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          companionDesc,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: StarpathColors.onSurfaceVariant,
-                            height: 1.4,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Divider(
-              height: 1,
-              thickness: 1,
-              color: StarpathColors.outlineVariant.withValues(alpha: 0.15),
-            ),
-            // 用户信息行 + 前往聊天
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   UserAvatar(
                     user: agent.userBrief,
-                    size: 28,
+                    size: 32,
                     useRandomAvatar: true,
-                    cornerRatio: 0.4,
+                    cornerRatio: 0.45,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
                           agent.name,
                           style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
                             color: StarpathColors.onSurface,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
+                        const SizedBox(height: 2),
                         Row(
                           children: [
                             const Icon(Icons.location_on_rounded,
                                 size: 11, color: StarpathColors.primary),
                             const SizedBox(width: 2),
-                            Text(
-                              agent.city,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: StarpathColors.onSurfaceVariant,
+                            Flexible(
+                              child: Text(
+                                agent.city,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: StarpathColors.onSurfaceVariant
+                                      .withValues(alpha: 0.85),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -535,37 +516,160 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
                       ],
                     ),
                   ),
+                  // 关闭按钮（卡片右上角）
                   GestureDetector(
-                    onTap: () {},
+                    onTap: () => setState(() => _selected = null),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 18, vertical: 9),
+                      width: 28,
+                      height: 28,
                       decoration: BoxDecoration(
-                        gradient: StarpathColors.primaryGradient,
-                        borderRadius: BorderRadius.circular(100),
-                        boxShadow: [
-                          BoxShadow(
-                            color: StarpathColors.primary.withValues(alpha: 0.4),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: const Text(
-                        '前往聊天',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                        shape: BoxShape.circle,
+                        color: StarpathColors.surfaceContainerHigh
+                            .withValues(alpha: 0.8),
+                        border: Border.all(
+                          color: StarpathColors.outlineVariant
+                              .withValues(alpha: 0.4),
+                          width: 0.8,
                         ),
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: StarpathColors.onSurfaceVariant,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
+
+            // ── 封面图 ─────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: _kBubbleHPad),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: SizedBox(
+                  width: _kBubbleCoverSide,
+                  height: _kBubbleCoverSide,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFF2D0E5A), Color(0xFF1A0840)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            gradient: StarpathColors.primaryGradient,
+                            borderRadius: BorderRadius.circular(100),
+                          ),
+                          child: const Text(
+                            'AI 伙伴',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Image.asset(
+                          ipImage,
+                          width: _kBubbleCoverSide,
+                          height: _kBubbleCoverSide,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => Image.asset(
+                            _kBubbleIpImages[0],
+                            width: _kBubbleCoverSide,
+                            height: _kBubbleCoverSide,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // ── AI 伙伴名称 + 描述 ─────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  _kBubbleHPad, 12, _kBubbleHPad, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    companionName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: StarpathColors.onSurface,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    companionDesc,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: StarpathColors.onSurfaceVariant,
+                      height: 1.35,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+
+            // ── 前往聊天 按钮 ──────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  _kBubbleHPad, 12, _kBubbleHPad, _kBubbleHPad),
+              child: GestureDetector(
+                onTap: () {},
+                child: Container(
+                  alignment: Alignment.center,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: StarpathColors.primaryGradient,
+                    borderRadius: BorderRadius.circular(100),
+                    boxShadow: [
+                      BoxShadow(
+                        color: StarpathColors.primary.withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: const Text(
+                    '前往聊天',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
+      ),
     );
   }
 }
@@ -644,15 +748,15 @@ class _GlobeBodyPainter extends CustomPainter {
       center,
       r,
       Paint()
-        ..shader = RadialGradient(
-          center: const Alignment(-0.30, -0.38),
+        ..shader = const RadialGradient(
+          center: Alignment(-0.30, -0.38),
           radius: 1.30,
-          colors: const [
+          colors: [
             _purpleLight,
             _purpleMid,
             _purpleDeep,
           ],
-          stops: const [0.0, 0.50, 1.0],
+          stops: [0.0, 0.50, 1.0],
         ).createShader(rect),
     );
 

@@ -623,6 +623,97 @@ class _AgentCard extends ConsumerWidget {
 
     return GestureDetector(
       onTap: () async {
+        // 预览伙伴（id 以 preview- 开头）是本地 Demo，引导用户创建真实伙伴
+        if (agent.id.startsWith('preview-')) {
+          if (!context.mounted) return;
+          await showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: StarpathColors.surfaceContainer,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            builder: (ctx) {
+              return SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: StarpathColors.outlineVariant,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      Text(
+                        agent.emoji,
+                        style: const TextStyle(fontSize: 48),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        agent.name,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: StarpathColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '这是一个演示伙伴，暂时无法直接对话。\n创建属于你自己的 AI 伙伴，才能开始聊天 ✨',
+                        style: TextStyle(
+                          fontSize: 14,
+                          height: 1.55,
+                          color: StarpathColors.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 24),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          context.push('/agents/create');
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            gradient: StarpathColors.primaryGradient,
+                            borderRadius: BorderRadius.circular(100),
+                            boxShadow: [
+                              BoxShadow(
+                                color: StarpathColors.primary
+                                    .withValues(alpha: 0.35),
+                                blurRadius: 14,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: const Text(
+                            '去创建我的伙伴 →',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: StarpathColors.onPrimary,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+          return;
+        }
+
+        // 真实伙伴：调用后端创建会话
         try {
           final repo = ref.read(chatRepositoryProvider);
           final conv = await repo.createConversation(agent.id);
@@ -705,13 +796,7 @@ class _AgentCard extends ConsumerWidget {
                           end: Alignment.bottomRight,
                         ),
                       ),
-                      alignment: Alignment.center,
-                      child: AuraAvatar(
-                        fallbackEmoji: agent.emoji,
-                        size: 76,
-                        gradientColors: [gradStart, gradEnd],
-                        state: CompanionState.active,
-                      ),
+                      child: _buildAgentImage(agent, gradStart, gradEnd),
                     ),
                   ),
                 ),
@@ -741,6 +826,33 @@ class _AgentCard extends ConsumerWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// 优先使用本地 PNG 透明图（预览伙伴循环分配 ai1/ai2/ai3），
+  /// 真实伙伴回退到 AuraAvatar。
+  Widget _buildAgentImage(AgentModel agent, Color gradStart, Color gradEnd) {
+    if (agent.id.startsWith('preview-')) {
+      final num = int.tryParse(agent.id.replaceFirst('preview-', '')) ?? 1;
+      final imgIdx = ((num - 1) % 3) + 1; // 1, 2, 3 循环
+      final assetPath = 'images/png/ai$imgIdx.png';
+      return Image.asset(
+        assetPath,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => _fallbackAvatar(agent, gradStart, gradEnd),
+      );
+    }
+    return _fallbackAvatar(agent, gradStart, gradEnd);
+  }
+
+  Widget _fallbackAvatar(AgentModel agent, Color gradStart, Color gradEnd) {
+    return Center(
+      child: AuraAvatar(
+        fallbackEmoji: agent.emoji,
+        size: 76,
+        gradientColors: [gradStart, gradEnd],
+        state: CompanionState.active,
       ),
     );
   }

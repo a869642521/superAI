@@ -476,7 +476,6 @@ class _FeedCardState extends State<_FeedCard> {
   @override
   Widget build(BuildContext context) {
     final card = widget.card;
-    // Staggered entrance: cap delay so off-screen items don't wait forever
     final delay = Duration(milliseconds: (widget.index * 55).clamp(0, 500));
 
     return AnimatedScale(
