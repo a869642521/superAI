@@ -51,31 +51,37 @@ class _StarpathAppState extends ConsumerState<StarpathApp> {
       theme: StarpathTheme.darkTheme,
       routerConfig: router,
       showSemanticsDebugger: kDebugMode && kIsWeb && _kWebSemanticsDebug,
+      // Web 预览：把整个 app 嵌入手机框内，用 builder 避免二层 MaterialApp 路由冲突
+      builder: kIsWeb
+          ? (context, child) => _WebPhoneFrame(child: child ?? const SizedBox())
+          : null,
     );
 
-    if (kIsWeb) {
-      const outerBg = Color(0xFFFAFAFA); // App 外：浅白底
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'Starpath',
-        theme: ThemeData(
-          useMaterial3: true,
-          brightness: Brightness.light,
-          scaffoldBackgroundColor: outerBg,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFFCC97FF),
-            brightness: Brightness.light,
-          ),
-        ),
-        home: Scaffold(
-          backgroundColor: outerBg,
-          body: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: AspectRatio(
-                aspectRatio: 9 / 19.5,
-                child: Container(
-                constraints: const BoxConstraints(maxHeight: 844),
+    return app;
+  }
+}
+
+// ── Web phone frame (single-MaterialApp approach) ─────────────────────────────
+
+/// 将整个 app 渲染在仿手机边框里，通过 MaterialApp.builder 注入，
+/// 避免嵌套两层 MaterialApp 导致路由冲突。
+class _WebPhoneFrame extends StatelessWidget {
+  final Widget child;
+  const _WebPhoneFrame({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    const outerBg = Color(0xFFFAFAFA);
+    return Container(
+      color: outerBg,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: AspectRatio(
+            aspectRatio: 9 / 19.5,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 844),
+              child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),
@@ -99,19 +105,16 @@ class _StarpathAppState extends ConsumerState<StarpathApp> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const _WebSimulatedStatusBar(),
-                      Expanded(child: app),
+                      Expanded(child: child),
                     ],
                   ),
                 ),
               ),
             ),
-            ),
           ),
         ),
-      );
-    }
-
-    return app;
+      ),
+    );
   }
 }
 
@@ -121,8 +124,8 @@ class _WebSimulatedStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconColor = StarpathColors.onSurfaceVariant;
-    return Material(
+    const iconColor = StarpathColors.onSurfaceVariant;
+    return ColoredBox(
       color: StarpathColors.surface,
       child: SizedBox(
         height: 44,
@@ -130,7 +133,7 @@ class _WebSimulatedStatusBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           child: Row(
             children: [
-              Text(
+              const Text(
                 '9:41',
                 style: TextStyle(
                   fontSize: 14,
@@ -140,12 +143,12 @@ class _WebSimulatedStatusBar extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              Icon(Icons.signal_cellular_alt_rounded,
+              const Icon(Icons.signal_cellular_alt_rounded,
                   size: 16, color: iconColor),
               const SizedBox(width: 5),
-              Icon(Icons.wifi_rounded, size: 16, color: iconColor),
+              const Icon(Icons.wifi_rounded, size: 16, color: iconColor),
               const SizedBox(width: 5),
-              Icon(Icons.battery_full_rounded, size: 20, color: iconColor),
+              const Icon(Icons.battery_full_rounded, size: 20, color: iconColor),
             ],
           ),
         ),

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
@@ -7,7 +8,6 @@ import 'package:starpath/features/agent_studio/data/agent_providers.dart';
 import 'package:starpath/features/agent_studio/data/agent_template_categories.dart';
 import 'package:starpath/features/agent_studio/domain/agent_model.dart';
 import 'package:starpath/features/chat/data/chat_providers.dart';
-import 'package:starpath/shared/widgets/aura_avatar.dart';
 
 Color _hexColor(String hex) {
   hex = hex.replaceFirst('#', '');
@@ -74,12 +74,92 @@ final List<AgentModel> _previewAgents = [
   ),
 ];
 
-/// NFT-style reference: purple → pink for selected filter chips.
-const LinearGradient _chipSelectedGradient = LinearGradient(
-  colors: [Color(0xFF8E2DE2), Color(0xFFFF0080)],
-  begin: Alignment.topLeft,
-  end: Alignment.bottomRight,
-);
+/// 伙伴页封面图候选（勿加 `assets/` 前缀，避免 Web 双重路径）。
+/// 新增图片时放入 `app/images/` 并在此加入路径即可（`pubspec` 已声明 `images/` 目录）。
+const List<String> kPartnerCoverImages = [
+  'images/ip0.png',
+  'images/ip1.png',
+  'images/ip2.png',
+  'images/ip3.png',
+  'images/ip4.png',
+  'images/ip5.png',
+  'images/ip7.png',
+];
+
+/// 按 key 稳定分配封面（同一伙伴/社群始终同一张，看起来像「随机」混搭）。
+String partnerCoverImageFor(Object key) =>
+    kPartnerCoverImages[key.hashCode.abs() % kPartnerCoverImages.length];
+
+/// 封面图：加载失败时回退到 ip1（避免新增图片后仅热重载、AssetManifest 未更新时出现红叉）。
+class _PartnerCoverImage extends StatelessWidget {
+  final String assetPath;
+
+  const _PartnerCoverImage({required this.assetPath});
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      assetPath,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) {
+        if (assetPath == kPartnerCoverImages[0]) {
+          return const ColoredBox(
+            color: StarpathColors.surfaceContainerHigh,
+            child: Center(
+              child: Icon(
+                Icons.image_not_supported_outlined,
+                color: StarpathColors.onSurfaceVariant,
+                size: 40,
+              ),
+            ),
+          );
+        }
+        return _PartnerCoverImage(assetPath: kPartnerCoverImages[0]);
+      },
+    );
+  }
+}
+
+class _SpotlightCommunity {
+  final String title;
+  final String description;
+  final int memberCount;
+
+  const _SpotlightCommunity({
+    required this.title,
+    required this.description,
+    required this.memberCount,
+  });
+}
+
+const List<_SpotlightCommunity> _kSpotlightCommunities = [
+  _SpotlightCommunity(
+    title: '骑行同好社',
+    description: '和骑友分享路线、装备与周末远征计划，一起探索城市与郊外。',
+    memberCount: 124,
+  ),
+  _SpotlightCommunity(
+    title: '音乐创作圈',
+    description: '从 Lo-Fi 到电子乐，交流编曲灵感与同好作品，找到你的声音。',
+    memberCount: 89,
+  ),
+  _SpotlightCommunity(
+    title: 'AI 学习营',
+    description: 'Prompt、模型与工具链实战，和伙伴一起把想法做成产品。',
+    memberCount: 256,
+  ),
+  _SpotlightCommunity(
+    title: '夜跑打卡组',
+    description: '每晚互相督促打卡，安全路线与配速心得，越跑越轻松。',
+    memberCount: 67,
+  ),
+  _SpotlightCommunity(
+    title: '读书与思辨',
+    description: '每月共读一本书，线上圆桌讨论，把阅读变成对话。',
+    memberCount: 142,
+  ),
+];
 
 class AgentStudioPage extends ConsumerStatefulWidget {
   const AgentStudioPage({super.key});
@@ -116,6 +196,7 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
     return CustomScrollView(
       slivers: [
         _headerSliver(),
+        _spotlightCardsSliver(),
         _chipsSliver(),
         if (filtered.isEmpty)
           SliverFillRemaining(
@@ -124,13 +205,13 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.68,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 14,
+                childAspectRatio: 0.62,
               ),
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _AgentCard(agent: filtered[i]),
@@ -153,6 +234,7 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
         loading: () => CustomScrollView(
           slivers: [
             _headerSliver(),
+            _spotlightCardsSliver(),
             _chipsSliver(),
             const SliverFillRemaining(
               child: Center(
@@ -173,7 +255,7 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
     final top = MediaQuery.paddingOf(context).top;
     return SliverToBoxAdapter(
       child: Padding(
-        padding: EdgeInsets.fromLTRB(20, top + 16, 20, 4),
+        padding: EdgeInsets.fromLTRB(20, top + 20, 20, 18),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
@@ -205,35 +287,34 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
             GestureDetector(
               onTap: _openCreate,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
-                  gradient: StarpathColors.primaryGradient,
+                  gradient: StarpathColors.selectedGradient,
                   borderRadius: BorderRadius.circular(100),
                   boxShadow: [
                     BoxShadow(
-                      color: StarpathColors.primary.withValues(alpha: 0.35),
+                      color: StarpathColors.accentViolet.withValues(alpha: 0.38),
                       blurRadius: 14,
                       spreadRadius: -2,
                       offset: const Offset(0, 4),
                     ),
                   ],
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.add_rounded,
-                      size: 18,
-                      color: StarpathColors.onPrimary,
-                    ),
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: const [
+                    Icon(Icons.add_rounded, size: 18, color: Colors.white),
                     SizedBox(width: 6),
                     Text(
                       '创建伙伴',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: StarpathColors.onPrimary,
+                        color: Colors.white,
+                        height: 1,
                       ),
                     ),
                   ],
@@ -246,64 +327,111 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
     );
   }
 
+  Widget _spotlightCardsSliver() {
+    return SliverToBoxAdapter(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 卡片宽 = 可用宽 - 左侧内边距(20) - 右侧"下一张"露出量(36) - 卡片间距(12)
+          final cardWidth = constraints.maxWidth - 20 - 36 - 12;
+          const cardHeight = 210.0;
+          return SizedBox(
+            height: cardHeight + 20,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              itemCount: _kSpotlightCommunities.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 14),
+              itemBuilder: (context, i) {
+                return _SpotlightCommunityCard(
+                  data: _kSpotlightCommunities[i],
+                  imageAsset: partnerCoverImageFor(_kSpotlightCommunities[i].title),
+                  width: cardWidth,
+                  height: cardHeight,
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _chipsSliver() {
     return SliverToBoxAdapter(
-      child: SizedBox(
-        height: 44,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
-          itemCount: _chipLabels.length,
-          itemBuilder: (context, i) {
-            final selected = i == _chipIndex;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () => setState(() => _chipIndex = i),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                  decoration: BoxDecoration(
-                    gradient: selected ? _chipSelectedGradient : null,
-                    color: selected
-                        ? null
-                        : StarpathColors.surfaceContainerHigh
-                            .withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(100),
-                    border: selected
-                        ? null
-                        : Border.all(
-                            color: StarpathColors.outlineVariant,
-                            width: 0.8,
-                          ),
-                    boxShadow: selected
-                        ? [
-                            BoxShadow(
-                              color: const Color(0xFF8E2DE2)
-                                  .withValues(alpha: 0.35),
-                              blurRadius: 12,
-                              offset: const Offset(0, 3),
-                            ),
-                          ]
-                        : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+            child: Text(
+              '超火的ai伙伴',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: StarpathColors.onSurface,
                   ),
-                  child: Text(
-                    _chipLabels[i],
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500,
-                      color: selected
-                          ? Colors.white
-                          : StarpathColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 46,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 2),
+              itemCount: _chipLabels.length,
+              itemBuilder: (context, i) {
+                final selected = i == _chipIndex;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _chipIndex = i),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 8),
+                      decoration: BoxDecoration(
+                        gradient:
+                            selected ? StarpathColors.selectedGradient : null,
+                        color: selected
+                            ? null
+                            : StarpathColors.surfaceContainerHigh
+                                .withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(100),
+                        border: selected
+                            ? null
+                            : Border.all(
+                                color: StarpathColors.outlineVariant,
+                                width: 0.8,
+                              ),
+                        boxShadow: selected
+                            ? [
+                                BoxShadow(
+                                  color: StarpathColors.accentViolet
+                                      .withValues(alpha: 0.38),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Text(
+                        _chipLabels[i],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight:
+                              selected ? FontWeight.w700 : FontWeight.w500,
+                          color: selected
+                              ? Colors.white
+                              : StarpathColors.onSurfaceVariant,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-            );
-          },
-        ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -336,6 +464,182 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
               textAlign: TextAlign.center,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SpotlightCommunityCard extends StatefulWidget {
+  final _SpotlightCommunity data;
+  final String imageAsset;
+  final double width;
+  final double height;
+
+  const _SpotlightCommunityCard({
+    required this.data,
+    required this.imageAsset,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  State<_SpotlightCommunityCard> createState() =>
+      _SpotlightCommunityCardState();
+}
+
+class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
+  bool _pressed = false;
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.data;
+    // 图片高 = 卡片总高 - 底部文字区高度(56)
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) {
+          setState(() => _pressed = false);
+          HapticFeedback.selectionClick();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('「${d.title}」即将开放'),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 1),
+              backgroundColor: StarpathColors.surfaceContainerHighest,
+            ),
+          );
+        },
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: widget.width,
+            height: widget.height,
+            decoration: BoxDecoration(
+              color: StarpathColors.surfaceContainer,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: _hovered
+                  ? [
+                      BoxShadow(
+                        color: StarpathColors.accentViolet
+                            .withValues(alpha: 0.22),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.20),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+            ),
+            // 整张卡片就是一张图，文字叠在底部磨砂层上
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // 背景图
+                  _PartnerCoverImage(assetPath: widget.imageAsset),
+                  // 底部胶囊磨砂信息条
+                  Positioned(
+                    left: 12,
+                    right: 12,
+                    bottom: 12,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.38),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      d.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                        height: 1.2,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      d.description,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        height: 1.3,
+                                        color: Colors.white
+                                            .withValues(alpha: 0.72),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // 人数角标（左上）
+                  Positioned(
+                    top: 10,
+                    left: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.person_outline_rounded,
+                              size: 13, color: Colors.white),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${d.memberCount}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              height: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -376,23 +680,20 @@ class _AgentCard extends ConsumerWidget {
           }
         }
       },
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: StarpathColors.surfaceContainer.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: StarpathColors.outlineVariant,
-                width: 1,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          // 不用 BackdropFilter：Web 上模糊层与圆角裁剪易错位，底部会出现「叠色」伪影
+          color: StarpathColors.surfaceContainer.withValues(alpha: 0.82),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: StarpathColors.outlineVariant,
+            width: 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
                 Row(
                   children: [
                     Expanded(
@@ -432,21 +733,28 @@ class _AgentCard extends ConsumerWidget {
                   aspectRatio: 1,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [gradStart, gradEnd],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _PartnerCoverImage(
+                          assetPath: partnerCoverImageFor(agent.id),
                         ),
-                      ),
-                      alignment: Alignment.center,
-                      child: AuraAvatar(
-                        fallbackEmoji: agent.emoji,
-                        size: 76,
-                        gradientColors: [gradStart, gradEnd],
-                        state: CompanionState.active,
-                      ),
+                        // 底部轻渐变，与主题色衔接
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                gradStart.withValues(alpha: 0.18),
+                                gradEnd.withValues(alpha: 0.38),
+                              ],
+                              stops: const [0.45, 0.78, 1.0],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -473,8 +781,6 @@ class _AgentCard extends ConsumerWidget {
                   ),
                 ),
               ],
-            ),
-          ),
         ),
       ),
     );

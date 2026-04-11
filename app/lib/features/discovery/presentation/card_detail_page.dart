@@ -16,7 +16,14 @@ import 'package:starpath/features/discovery/widgets/user_avatar.dart';
 final _cardDetailProvider =
     FutureProvider.family<ContentCardModel, String>((ref, id) async {
   final repo = ref.watch(contentRepositoryProvider);
-  return repo.getCard(id);
+  try {
+    return await repo.getCard(id);
+  } catch (_) {
+    for (final c in ref.read(feedProvider).items) {
+      if (c.id == id) return c;
+    }
+    rethrow;
+  }
 });
 
 final _commentsProvider =
@@ -33,7 +40,14 @@ final _localLikeProvider =
 
 class CardDetailPage extends ConsumerStatefulWidget {
   final String cardId;
-  const CardDetailPage({super.key, required this.cardId});
+  /// 从瀑布流带入时可立即展示，避免详情接口失败或解析异常导致空白。
+  final ContentCardModel? initialCard;
+
+  const CardDetailPage({
+    super.key,
+    required this.cardId,
+    this.initialCard,
+  });
 
   @override
   ConsumerState<CardDetailPage> createState() => _CardDetailPageState();
@@ -149,15 +163,31 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
   @override
   Widget build(BuildContext context) {
     final cardAsync = ref.watch(_cardDetailProvider(widget.cardId));
+    final initial = widget.initialCard;
+    final fallback = (initial != null && initial.id == widget.cardId)
+        ? initial
+        : null;
 
     return Scaffold(
       backgroundColor: StarpathColors.surface,
       body: cardAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Text('加载失败：$e',
-              style: const TextStyle(color: StarpathColors.onSurfaceVariant)),
-        ),
+        loading: () => fallback != null
+            ? _buildContent(fallback)
+            : const Center(child: CircularProgressIndicator()),
+        error: (e, _) => fallback != null
+            ? _buildContent(fallback)
+            : Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    '加载失败：$e',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: StarpathColors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
         data: (card) => _buildContent(card),
       ),
     );
@@ -184,18 +214,36 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
           controller: _scrollController,
           slivers: [
             SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  MediaQuery.of(context).padding.top + 12,
-                  16,
-                  0,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: _DetailTopBar(
+                    cardId: widget.cardId,
+                    user: card.user,
+                    onBack: () => context.pop(),
+                  ),
                 ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildMediaCard(card),
+                    // ── 封面 ──
+                    _buildMediaCard(card)
+                        .animate()
+                        .fadeIn(duration: 400.ms)
+                        .scale(
+                          begin: const Offset(0.94, 0.94),
+                          duration: 400.ms,
+                          curve: Curves.easeOutCubic,
+                        ),
                     const SizedBox(height: 18),
+
+                    // ── 标题 ──
                     Text(
                       displayTitle,
                       style: const TextStyle(
@@ -205,7 +253,10 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                         letterSpacing: -0.44,
                         height: 1.3,
                       ),
-                    ),
+                    )
+                        .animate(delay: 80.ms)
+                        .fadeIn(duration: 320.ms)
+                        .slideY(begin: 0.12, duration: 320.ms, curve: Curves.easeOut),
                     if (card.title.isNotEmpty && card.title != displayTitle) ...[
                       const SizedBox(height: 6),
                       Text(
@@ -218,57 +269,71 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                         ),
                       ),
                     ],
-                    const SizedBox(height: 12),
+                    if (publishMeta.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        publishMeta,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: StarpathColors.textTertiary,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
 
-                    // Author row
-                    _AuthorRow(user: card.user, publishMeta: publishMeta),
+                    // ── 正文 ──
+                    (card.content.trim().isNotEmpty &&
+                                card.content.trim() != card.title.trim()
+                            ? Text(
+                                card.content,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  color: StarpathColors.onSurfaceVariant,
+                                  height: 1.65,
+                                ),
+                              )
+                            : Text(
+                                '暂无正文',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: StarpathColors.onSurfaceVariant
+                                      .withValues(alpha: 0.72),
+                                  height: 1.65,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ))
+                        .animate(delay: 200.ms)
+                        .fadeIn(duration: 300.ms),
+
+                    // ── 标签 ──
                     const SizedBox(height: 14),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: tags
+                          .asMap()
+                          .entries
                           .map(
-                            (tag) => Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: StarpathColors.surfaceContainerHigh
-                                    .withValues(alpha: 0.72),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: StarpathColors.outlineVariant,
+                            (e) => _GradientTag(label: e.value)
+                                .animate(delay: Duration(milliseconds: 260 + e.key * 60))
+                                .fadeIn(duration: 280.ms)
+                                .scale(
+                                  begin: const Offset(0.7, 0.7),
+                                  duration: 280.ms,
+                                  curve: Curves.easeOutBack,
                                 ),
-                              ),
-                              child: Text(
-                                tag,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: StarpathColors.primary,
-                                ),
-                              ),
-                            ),
                           )
                           .toList(),
                     ),
-                    const SizedBox(height: 16),
 
-                    // Body content
-                    Text(
-                      card.content,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        color: StarpathColors.onSurfaceVariant,
-                        height: 1.65,
-                      ),
-                    ),
-
-                    // Agent tag
+                    // ── AI 助手卡片 ──
                     if (card.agent != null) ...[
-                      const SizedBox(height: 20),
-                      _AgentTag(agent: card.agent!),
+                      const SizedBox(height: 16),
+                      _AgentTag(agent: card.agent!)
+                          .animate(delay: 320.ms)
+                          .fadeIn(duration: 300.ms)
+                          .slideY(begin: 0.1, duration: 300.ms, curve: Curves.easeOut),
                     ],
 
                     const SizedBox(height: 20),
@@ -277,7 +342,9 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                       commentCount: commentCount,
                       favoriteCount: favoriteCountForCard(card),
                       shareCount: shareCountForCard(card),
-                    ),
+                    )
+                        .animate(delay: 380.ms)
+                        .fadeIn(duration: 280.ms),
 
                     // Divider
                     const SizedBox(height: 24),
@@ -293,12 +360,6 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
             _buildComments(card, commentsAsync),
             const SliverToBoxAdapter(child: SizedBox(height: 120)),
           ],
-        ),
-
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 8,
-          left: 16,
-          child: _buildBackButton(),
         ),
 
         // Bottom action bar: like + comment
@@ -322,22 +383,6 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
     );
   }
 
-  Widget _buildBackButton() {
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          color: StarpathColors.surfaceContainer.withValues(alpha: 0.6),
-          child: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_rounded, size: 18),
-            color: StarpathColors.onSurface,
-            onPressed: () => context.pop(),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildMediaCard(ContentCardModel card) {
     final urls = galleryUrlsForCard(card);
     final ratio = coverAspectRatioForCard(card);
@@ -358,96 +403,108 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
         borderRadius: BorderRadius.circular(24),
         child: GestureDetector(
           onDoubleTap: () => _onGalleryDoubleTap(card),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              AspectRatio(
-                aspectRatio: ratio,
-                child: PageView.builder(
-                  controller: _galleryPageController,
-                  onPageChanged: (i) => setState(() => _galleryPageIndex = i),
-                  itemCount: urls.length,
-                  itemBuilder: (context, i) {
-                    Widget img = CachedNetworkImage(
-                      imageUrl: urls[i],
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      height: double.infinity,
-                      errorWidget: (_, __, ___) => _GradientCover(card: card),
-                    );
-                    if (i == 0) {
-                      img = Hero(
-                        tag: 'card-cover-${card.id}',
-                        child: img,
+          // AspectRatio provides bounded height; Stack positions overlays on top.
+          child: AspectRatio(
+            aspectRatio: ratio,
+            child: Stack(
+              children: [
+                // Full-area gallery
+                Positioned.fill(
+                  child: PageView.builder(
+                    controller: _galleryPageController,
+                    onPageChanged: (i) =>
+                        setState(() => _galleryPageIndex = i),
+                    itemCount: urls.length,
+                    itemBuilder: (context, i) {
+                      Widget img = CachedNetworkImage(
+                        imageUrl: urls[i],
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: double.infinity,
+                        errorWidget: (_, __, ___) =>
+                            _GradientCover(card: card),
                       );
-                    }
-                    return img;
-                  },
-                ),
-              ),
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.34),
-                    borderRadius: BorderRadius.circular(999),
+                      if (i == 0) {
+                        img = Hero(
+                          tag: 'card-cover-${card.id}',
+                          child: img,
+                        );
+                      }
+                      return img;
+                    },
                   ),
-                  child: Text(
-                    '${_galleryPageIndex + 1}/${urls.length}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                ),
+
+                // 多图页码
+                if (urls.length > 1)
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.34),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        '${_galleryPageIndex + 1}/${urls.length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-              if (urls.length > 1)
-                Positioned(
-                  bottom: 14,
-                  left: 0,
-                  right: 0,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(urls.length, (i) {
-                      final active = i == _galleryPageIndex;
-                      return AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        width: active ? 16 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: active
-                              ? Colors.white
-                              : Colors.white.withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      );
-                    }),
+
+                // Page dots (multi-image only)
+                if (urls.length > 1)
+                  Positioned(
+                    bottom: 14,
+                    left: 0,
+                    right: 0,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(urls.length, (i) {
+                        final active = i == _galleryPageIndex;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: active ? 16 : 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: active
+                                ? Colors.white
+                                : Colors.white.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        );
+                      }),
+                    ),
                   ),
-                ),
-              if (_showBurstHeart)
-                Center(
-                  child: Icon(
-                    Icons.favorite_rounded,
-                    size: 100,
-                    color: const Color(0xFFFF4D6D).withValues(alpha: 0.92),
-                  )
-                      .animate()
-                      .scale(
-                        duration: 220.ms,
-                        begin: const Offset(0.35, 0.35),
-                        curve: Curves.easeOutBack,
-                      )
-                      .fadeOut(
-                        delay: 350.ms,
-                        duration: 280.ms,
-                      ),
-                ),
-            ],
+
+                // Double-tap heart burst
+                if (_showBurstHeart)
+                  Center(
+                    child: Icon(
+                      Icons.favorite_rounded,
+                      size: 100,
+                      color: const Color(0xFFFF4D6D).withValues(alpha: 0.92),
+                    )
+                        .animate()
+                        .scale(
+                          duration: 220.ms,
+                          begin: const Offset(0.35, 0.35),
+                          curve: Curves.easeOutBack,
+                        )
+                        .fadeOut(
+                          delay: 350.ms,
+                          duration: 280.ms,
+                        ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -636,15 +693,22 @@ class _BottomBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
 
-                // Send button
-                GestureDetector(
+                // Send button with press animation
+                _PressScaleWrapper(
                   onTap: onSend,
                   child: Container(
                     width: 42,
                     height: 42,
-                    decoration: const BoxDecoration(
-                      gradient: StarpathColors.primaryGradient,
+                    decoration: BoxDecoration(
+                      gradient: StarpathColors.selectedGradient,
                       shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: StarpathColors.accentViolet.withValues(alpha: 0.40),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
                     child: isSendingComment
                         ? const Padding(
@@ -746,60 +810,127 @@ class _GradientCover extends StatelessWidget {
   }
 }
 
-class _AuthorRow extends StatelessWidget {
+/// 详情页顶栏卡片：返回 | 头像 + 昵称 | 渐变关注 | 分享
+class _DetailTopBar extends StatelessWidget {
+  final String cardId;
   final UserBrief user;
-  final String publishMeta;
+  final VoidCallback onBack;
 
-  const _AuthorRow({
+  const _DetailTopBar({
+    required this.cardId,
     required this.user,
-    required this.publishMeta,
+    required this.onBack,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        UserAvatar(user: user, size: 36),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                user.nickname,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: StarpathColors.onSurface,
+    return Container(
+      height: 62,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.only(left: 4, right: 2),
+      decoration: BoxDecoration(
+        color: StarpathColors.surfaceContainer.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+            spreadRadius: -4,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _PressScaleWrapper(
+            onTap: onBack,
+            child: const SizedBox(
+              width: 40,
+              height: 40,
+              child: Center(
+                child: Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  size: 18,
+                  color: StarpathColors.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                publishMeta,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: StarpathColors.textTertiary,
-                ),
-              ),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            gradient: StarpathColors.primaryGradient,
-            borderRadius: BorderRadius.circular(100),
-          ),
-          child: const Text(
-            '关注',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: StarpathColors.onPrimary,
             ),
           ),
+          const SizedBox(width: 2),
+          Hero(
+            tag: 'card-author-$cardId',
+            child: UserAvatar(
+              user: user,
+              size: 36,
+              useRandomAvatar: true,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              user.nickname,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: StarpathColors.onSurface,
+                letterSpacing: -0.25,
+                height: 1.2,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          const _GradientFollowButton(),
+          IconButton(
+            onPressed: () {},
+            icon: const Icon(Icons.share_rounded),
+            iconSize: 22,
+            color: StarpathColors.onSurfaceVariant,
+            style: IconButton.styleFrom(
+              minimumSize: const Size(42, 42),
+              padding: const EdgeInsets.all(8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 紫色渐变填充「关注」
+class _GradientFollowButton extends StatelessWidget {
+  const _GradientFollowButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressScaleWrapper(
+      onTap: () {},
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 7),
+        decoration: BoxDecoration(
+          gradient: StarpathColors.selectedGradient,
+          borderRadius: BorderRadius.circular(100),
+          boxShadow: [
+            BoxShadow(
+              color: StarpathColors.accentViolet.withValues(alpha: 0.38),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
-      ],
+        child: const Text(
+          '关注',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: StarpathColors.onPrimary,
+            height: 1.15,
+            letterSpacing: 0.35,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1234,6 +1365,77 @@ class _NestedReplyTileState extends State<_NestedReplyTile> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ── Shared animated components ─────────────────────────────────────────────────
+
+/// 可弹压缩放的通用包装器：按下 → 0.92，松开 → 1.0
+class _PressScaleWrapper extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+
+  const _PressScaleWrapper({required this.child, required this.onTap});
+
+  @override
+  State<_PressScaleWrapper> createState() => _PressScaleWrapperState();
+}
+
+class _PressScaleWrapperState extends State<_PressScaleWrapper> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.90 : 1.0,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOut,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// 话题标签胶囊：紫色描边 + 轻微渐变底色
+class _GradientTag extends StatelessWidget {
+  final String label;
+  const _GradientTag({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            StarpathColors.accentViolet.withValues(alpha: 0.18),
+            StarpathColors.accentIndigo.withValues(alpha: 0.12),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: StarpathColors.accentViolet.withValues(alpha: 0.50),
+          width: 1,
+        ),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: StarpathColors.accentViolet,
+        ),
+      ),
     );
   }
 }

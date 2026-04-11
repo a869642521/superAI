@@ -38,17 +38,19 @@ class ContentCardModel extends Equatable {
       id: json['id'] as String,
       userId: json['userId'] as String,
       agentId: json['agentId'] as String?,
-      type: _parseCardType(json['type'] as String),
+      type: _parseCardType(json['type']?.toString() ?? 'TEXT_IMAGE'),
       title: json['title'] as String? ?? '',
-      content: json['content'] as String,
+      content: json['content'] as String? ?? '',
       imageUrls: (json['imageUrls'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           [],
-      likeCount: json['likeCount'] as int? ?? 0,
-      commentCount: json['commentCount'] as int? ?? 0,
+      likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
+      commentCount: (json['commentCount'] as num?)?.toInt() ?? 0,
       createdAt: DateTime.parse(json['createdAt'] as String),
-      user: UserBrief.fromJson(json['user'] as Map<String, dynamic>),
+      user: UserBrief.fromJson(
+        Map<String, dynamic>.from(json['user'] as Map),
+      ),
       agent: json['agent'] != null
           ? AgentCardBrief.fromJson(json['agent'] as Map<String, dynamic>)
           : null,
@@ -57,7 +59,7 @@ class ContentCardModel extends Equatable {
   }
 
   static CardType _parseCardType(String type) {
-    switch (type) {
+    switch (type.toUpperCase()) {
       case 'TEXT_IMAGE':
         return CardType.textImage;
       case 'DIALOGUE':

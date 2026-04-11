@@ -41,6 +41,19 @@ class StarpathColors {
   static const Color success = Color(0xFF10B981);
   static const Color warning = Color(0xFFF59E0B);
 
+  // ── Accent / Selected (源自 icon 图标：明紫 → 深靛) ─────────────────────────
+  /// 与 icon 图标顶部一致的明亮紫罗兰
+  static const Color accentViolet = Color(0xFF9B72FF);
+  /// icon 图标底部的深靛紫
+  static const Color accentIndigo = Color(0xFF5B48E8);
+
+  /// 所有「选中」状态统一使用该渐变（导航栏光晕、按钮、标签、心形等）
+  static const LinearGradient selectedGradient = LinearGradient(
+    colors: [accentViolet, accentIndigo],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
   // ── Gradients ────────────────────────────────────────────────────────────────
   static const LinearGradient brandGradient = LinearGradient(
     colors: [primary, secondary],
@@ -102,6 +115,112 @@ class StarpathColors {
     [Color(0xFFE91E63), Color(0xFF9C27B0)],
     [Color(0xFF00BCD4), Color(0xFF4CAF50)],
   ];
+
+  // ── Avatar Accent Backgrounds ────────────────────────────────────────────────
+  /// 9 种高饱和纯色，用于头像圆角方块底色。
+  /// 按 userId 哈希取色，保证同一用户颜色稳定。
+  static const List<Color> avatarAccents = [
+    Color(0xFFF5C030), // 暖黄
+    Color(0xFFE84848), // 活力红
+    Color(0xFFC050D8), // 紫粉
+    Color(0xFF6040CC), // 深紫
+    Color(0xFF7EC040), // 草绿
+    Color(0xFFE85890), // 玫红
+    Color(0xFFF07830), // 橘橙
+    Color(0xFF9040CC), // 堇紫
+    Color(0xFF30B8D0), // 青蓝
+  ];
+
+  /// 根据任意字符串（通常为 userId）确定性取 [avatarAccents] 中的颜色。
+  static Color avatarAccentFor(String seed) {
+    final hash = seed.codeUnits.fold<int>(0, (h, c) => h * 31 + c);
+    return avatarAccents[hash.abs() % avatarAccents.length];
+  }
+}
+
+/// 高饱和「Juicy Blob」彩色图标色板（规范：`.cursor/rules/design-system.md` § Juicy Blob Icons）。
+/// 用于快捷入口、通知类圆钮等；新入口优先复用 [StarpathJuicyIcons] 预置三色。
+@immutable
+class StarpathJuicyIconPalette {
+  final LinearGradient blob;
+  final Color glowA;
+  final Color glowB;
+  final LinearGradient badge;
+
+  const StarpathJuicyIconPalette({
+    required this.blob,
+    required this.glowA,
+    required this.glowB,
+    required this.badge,
+  });
+}
+
+/// 预置 palette：提及(蓝紫) / 点赞(粉) / 新粉丝(青绿)
+abstract final class StarpathJuicyIcons {
+  StarpathJuicyIcons._();
+
+  /// 提及、@、通知类：电紫 → 钴蓝
+  static const StarpathJuicyIconPalette mentions = StarpathJuicyIconPalette(
+    blob: LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0xFFB794FF),
+        Color(0xFF7B5CFF),
+        Color(0xFF1E7FFF),
+      ],
+      stops: [0.0, 0.42, 1.0],
+    ),
+    glowA: Color(0xFF3D7CFF),
+    glowB: Color(0xFFA855FF),
+    badge: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [Color(0xFF4F46FF), Color(0xFF9333EA)],
+    ),
+  );
+
+  /// 点赞、喜欢：珊瑚粉 → 玫红
+  static const StarpathJuicyIconPalette likes = StarpathJuicyIconPalette(
+    blob: LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0xFFFF7A9A),
+        Color(0xFFFF3D7A),
+        Color(0xFFE91E8C),
+      ],
+      stops: [0.0, 0.48, 1.0],
+    ),
+    glowA: Color(0xFFFF2D7A),
+    glowB: Color(0xFFFF6BA8),
+    badge: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [Color(0xFFFF0A6C), Color(0xFFFF5C98)],
+    ),
+  );
+
+  /// 新粉丝、增长、青绿系入口：薄荷 → 松石绿
+  static const StarpathJuicyIconPalette followers = StarpathJuicyIconPalette(
+    blob: LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0xFF4FF5C8),
+        Color(0xFF00D9A8),
+        Color(0xFF00B894),
+      ],
+      stops: [0.0, 0.45, 1.0],
+    ),
+    glowA: Color(0xFF00D4AA),
+    glowB: Color(0xFF34E8C7),
+    badge: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [Color(0xFF00A884), Color(0xFF00D68F)],
+    ),
+  );
 }
 
 /// ─── Theme Definition ─────────────────────────────────────────────────────────

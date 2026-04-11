@@ -39,8 +39,12 @@ class ContentRepository {
     if (mock != null) return mock;
 
     final response = await _api.dio.get('/cards/$id');
-    return ContentCardModel.fromJson(
-        response.data['data'] as Map<String, dynamic>);
+    final raw = response.data;
+    final body = (raw is Map && raw['data'] != null) ? raw['data'] : raw;
+    if (body is! Map) {
+      throw FormatException('Invalid card payload for $id');
+    }
+    return ContentCardModel.fromJson(Map<String, dynamic>.from(body));
   }
 
   Future<List<CommentModel>> getComments(String cardId) async {

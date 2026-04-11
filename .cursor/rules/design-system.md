@@ -35,6 +35,35 @@ Inspired by Google Gemini's visual design language — gradients as life force, 
 - Error: `#EF4444`
 - Currency Coin: linear gradient `#FFD93D` → `#FF8C00`
 
+## Juicy Blob Icons（高饱和渐变彩色图标）
+
+用于**带语义颜色的图标容器**（快捷入口、通知角标、功能入口圆钮等），与深色背景形成「软糯 blob + 内发光」质感。**禁止**使用发灰的 pastel 作为主色；中灰混入会降低层次，仅在极少量高光层使用低透明度白。
+
+### 设计原则
+1. **饱和度优先**：主体渐变使用 HSB 上明显偏「纯」的色，避免 `#E8E2FF` 类灰薰衣草做主色阶。
+2. **垂直渐变**：`topCenter` → `bottomCenter`，三色 stops 约 `0.0 / 0.42~0.48 / 1.0`，顶略亮、底更浓，模拟参考图里的 blob 体积光。
+3. **图标图形**：`Icon` 使用 **纯白** `#FFFFFF`，可加极轻 `Shadow`（`black @ ~25% opacity, blur 4`）保证可读性。
+4. **顶缘高光**：仅在圆形上半部叠一层 `white @ 0.22~0.32` → `transparent` 的线性高光，**不要**用过亮高光（>0.4）盖住饱和度。
+5. **外发光（Bloom）**：两层 `BoxShadow`，颜色取自该 palette 的 **主色与辅色**（与 blob 同色 family），`blurRadius` 约 18~28，`alpha` 约 0.38~0.55；第三层可选更大半径、更低 alpha 的晕圈。
+6. **角标 / 小胶囊**：使用与主色同系的 **略更深** 双色 `LinearGradient`（对角），避免与 blob 完全同色块扁平。
+
+### 代码中的唯一数据源
+- Flutter：`app/lib/core/theme.dart` 内 `StarpathJuicyIcons`（及 `StarpathJuicyIconPalette`）。
+- 新增同类入口时 **复用** 现有三种 palette，或按本节原则新增第四种并写入 `theme.dart` + 在本文件登记用途。
+
+### 预置三色（与实现对齐）
+
+| 语义 | 渐变（上 → 下） | 光晕主色 | 用途示例 |
+|------|-----------------|----------|----------|
+| **蓝紫（提及 / @）** | `#B794FF` → `#7B5CFF` → `#1E7FFF` | `#3D7CFF` + `#A855FF` | 提及、通知类 |
+| **粉珊瑚（点赞 / 心）** | `#FF7A9A` → `#FF3D7A` → `#E91E8C` | `#FF2D7A` + `#FF6BA8` | 点赞、喜欢 |
+| **松石绿（新粉丝 / 增长）** | `#4FF5C8` → `#00D9A8` → `#00B894` | `#00D4AA` + `#34E8C7` | 新粉丝、增长、成功态入口 |
+
+### 实现清单（Checklist）
+- [ ] Blob 直径常见 **44~52dp**，光晕层可比 blob 大 **4~8dp**，`Stack` `clipBehavior: Clip.none`。
+- [ ] 未使用 `ShaderMask` 染图标时，**白图标 + 饱和 blob 底** 优先于灰图标 + 淡底。
+- [ ] 深色卡片背景上对比不足时，略增强 `glowA/B` 的 alpha，而不是把 blob 改成灰色。
+
 ## AI Companion Visual System
 
 ### Design Philosophy

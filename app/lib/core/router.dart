@@ -6,10 +6,14 @@ import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/auth/presentation/login_page.dart';
 import 'package:starpath/features/onboarding/presentation/onboarding_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_create_page.dart';
+import 'package:starpath/features/agent_studio/presentation/agent_studio_page.dart';
 import 'package:starpath/features/chat/presentation/chat_list_page.dart';
 import 'package:starpath/features/chat/presentation/chat_detail_page.dart';
+import 'package:starpath/features/chat/presentation/user_dm_detail_page.dart';
+import 'package:starpath/features/chat/presentation/notification_inbox_page.dart';
 import 'package:starpath/features/discovery/presentation/discovery_page.dart';
 import 'package:starpath/features/discovery/presentation/card_detail_page.dart';
+import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/creation/presentation/create_card_page.dart';
 import 'package:starpath/features/profile/presentation/profile_page.dart';
 import 'package:starpath/features/profile/presentation/wallet_page.dart';
@@ -91,8 +95,8 @@ GoRouter createRouter(WidgetRef ref) {
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: '/create',
-                builder: (context, state) => const CreateCardPage(),
+                path: '/agents',
+                builder: (context, state) => const AgentStudioPage(),
               ),
             ],
           ),
@@ -107,9 +111,30 @@ GoRouter createRouter(WidgetRef ref) {
         ],
       ),
       GoRoute(
+        path: '/create',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const CreateCardPage(),
+      ),
+      GoRoute(
         path: '/agents/create',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const AgentCreatePage(),
+      ),
+      GoRoute(
+        path: '/dm/:peerId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final id = state.pathParameters['peerId']!;
+          return UserDmDetailPage(peerId: id);
+        },
+      ),
+      GoRoute(
+        path: '/notifications',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final kind = state.uri.queryParameters['kind'] ?? 'mentions';
+          return NotificationInboxPage(kind: kind);
+        },
       ),
       GoRoute(
         path: '/chat/:conversationId',
@@ -127,8 +152,14 @@ GoRouter createRouter(WidgetRef ref) {
       GoRoute(
         path: '/cards/:cardId',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) =>
-            CardDetailPage(cardId: state.pathParameters['cardId']!),
+        builder: (context, state) {
+          final id = state.pathParameters['cardId']!;
+          final extra = state.extra;
+          return CardDetailPage(
+            cardId: id,
+            initialCard: extra is ContentCardModel ? extra : null,
+          );
+        },
       ),
     ],
   );

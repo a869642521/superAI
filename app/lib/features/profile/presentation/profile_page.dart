@@ -43,7 +43,7 @@ class ProfilePage extends StatelessWidget {
                       title: '我的AI伙伴',
                       subtitle: '管理你的AI伙伴',
                       iconGradient: StarpathColors.primaryGradient,
-                      onTap: () => context.go('/create'),
+                      onTap: () => context.go('/agents'),
                     ),
                     const SizedBox(height: 8),
                     _buildMenuItem(
