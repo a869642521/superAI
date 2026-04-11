@@ -6,13 +6,52 @@ import { MessageRole } from '@prisma/client';
 export class ChatService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** 确保 userId 对应的用户存在；未登录时返回系统匿名账号 */
+  private async resolveUserId(userId: string | undefined | null): Promise<string> {
+    if (userId && userId !== 'anonymous') {
+      const exists = await this.prisma.user.findUnique({ where: { id: userId } });
+      if (exists) return userId;
+    }
+    // 匿名用户：找或创建系统账号（phone = 'anonymous'）
+    const anon = await this.prisma.user.upsert({
+      where: { phone: 'anonymous' },
+      create: { phone: 'anonymous', nickname: '访客' },
+      update: {},
+    });
+    return anon.id;
+  }
+
   async createConversation(userId: string, agentId: string) {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent) throw new NotFoundException('Agent not found');
+    const realUserId = await this.resolveUserId(userId);
+
+    // 若 agent 不存在，自动创建占位 agent（支持预览卡片 / 地球模式等演示场景）
+    const agent = await this.prisma.agent.upsert({
+      where: { id: agentId },
+      create: {
+        id: agentId,
+        userId: realUserId,
+        name: 'AI 伙伴',
+        emoji: '🤖',
+        bio: '你好，我是你的 AI 伙伴，有什么可以帮你的吗？',
+        systemPrompt:
+          '你是一个温暖、友善的 AI 伙伴。请用自然、亲切的语气与用户交流，提供有价值的帮助和陪伴。',
+        gradientStart: '#6C63FF',
+        gradientEnd: '#00D2FF',
+      },
+      update: {},
+    });
+
+    // 若已存在相同 userId+agentId 的会话，直接复用（幂等）
+    const existing = await this.prisma.conversation.findFirst({
+      where: { userId: realUserId, agentId },
+      include: { agent: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing) return existing;
 
     return this.prisma.conversation.create({
       data: {
-        userId,
+        userId: realUserId,
         agentId,
         title: `与 ${agent.name} 的对话`,
       },

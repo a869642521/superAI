@@ -1,61 +1,60 @@
+"""
+Kimi Code LLM Gateway
+官方文档: https://www.kimi.com/code/docs/en/more/third-party-agents.html
+
+端点:    https://api.kimi.com/coding/v1
+模型:    kimi-for-coding
+API Key: sk-kimi-... （从 Kimi Code 会员页面获取）
+"""
+
 import os
 import json
 import httpx
 from typing import AsyncGenerator
-from openai import AsyncOpenAI, AuthenticationError as OpenAIAuthError
 
-_client: AsyncOpenAI | None = None
+_DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
+_DEFAULT_MODEL = "kimi-for-coding"
 
-
-def get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        api_key = os.getenv("MOONSHOT_API_KEY", "")
-        base_url = os.getenv("MOONSHOT_BASE_URL", "https://api.kimi.com/coding/v1")
-        if not api_key:
-            raise RuntimeError("MOONSHOT_API_KEY 未配置，请检查 ai-service/.env 文件")
-        # Kimi Code requires User-Agent to identify as a recognized coding agent
-        _client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            default_headers={"User-Agent": "claude-code/1.0.0"},
-        )
-    return _client
+# Kimi Code 需要此 User-Agent 才能被识别
+_USER_AGENT = "claude-code/1.0.0"
 
 
 def reset_client() -> None:
-    """Force re-read env vars and recreate the client (useful after .env changes)."""
-    global _client
-    _client = None
+    """占位方法，保持接口兼容。"""
+    pass
 
 
 def _get_model() -> str:
-    return os.getenv("LLM_MODEL", "kimi-for-coding")
+    return os.getenv("LLM_MODEL", _DEFAULT_MODEL)
 
 
 def _clamp_temperature(t: float) -> float:
-    """Kimi supports temperature in [0, 1]."""
     return max(0.0, min(1.0, t))
 
 
 async def stream_chat_completion(
     system_prompt: str,
     messages: list[dict],
-    temperature: float = 0.8,
-    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    max_tokens: int = 32768,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream chat completion tokens from Kimi Code.
+    流式调用 Kimi Code API。
 
-    Yields (token_type, content) pairs:
-      - ("thinking", text)  — reasoning / thinking phase
-      - ("content", text)   — final response text
-    but here we yield plain strings; callers receive only content tokens by default.
+    Yields:
+        普通 token:   直接 yield 文本字符串
+        思考 token:   yield "\x00think\x00{text}"（前端可据此展示推理过程）
     """
-    api_key = os.getenv("MOONSHOT_API_KEY", "")
-    base_url = os.getenv("MOONSHOT_BASE_URL", "https://api.kimi.com/coding/v1")
+    api_key = os.getenv("KIMI_CODE_API_KEY", "")
+    base_url = os.getenv("KIMI_CODE_BASE_URL", _DEFAULT_BASE_URL)
     model = _get_model()
     temperature = _clamp_temperature(temperature)
+
+    if not api_key:
+        raise RuntimeError(
+            "KIMI_CODE_API_KEY 未配置，请在 ai-service/.env 中填写。\n"
+            "前往获取: https://www.kimi.com/code → 会员页面 → API Keys"
+        )
 
     full_messages = [{"role": "system", "content": system_prompt}]
     full_messages.extend(messages)
@@ -71,11 +70,10 @@ async def stream_chat_completion(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "User-Agent": "claude-code/1.0.0",
+        "User-Agent": _USER_AGENT,
     }
 
-    # Use httpx directly to handle the non-standard reasoning_content field
-    async with httpx.AsyncClient(timeout=60.0) as http:
+    async with httpx.AsyncClient(timeout=120.0) as http:
         try:
             async with http.stream(
                 "POST",
@@ -85,24 +83,28 @@ async def stream_chat_completion(
             ) as response:
                 if response.status_code == 401:
                     raise RuntimeError(
-                        "Kimi API 认证失败（401）：请检查 MOONSHOT_API_KEY 是否正确，"
-                        "或前往 https://www.kimi.com/code/console 重新获取 API Key"
+                        "Kimi Code API 认证失败（401）：\n"
+                        "请检查 KIMI_CODE_API_KEY 是否正确（格式应为 sk-kimi-...）\n"
+                        "前往获取: https://www.kimi.com/code → 会员页面 → API Keys"
                     )
                 if response.status_code == 403:
                     raise RuntimeError(
-                        "Kimi Code 访问被拒绝（403）：此 API Key 不允许直接调用，"
-                        "请确认已订阅 Kimi Code 会员"
+                        "Kimi Code API 访问被拒绝（403）：\n"
+                        "请确认已订阅 Kimi Code 会员，且 API Key 有效"
                     )
+                if response.status_code == 429:
+                    raise RuntimeError("Kimi Code API 请求频率超限（429），请稍后再试")
                 if response.status_code != 200:
                     body = await response.aread()
-                    raise RuntimeError(f"Kimi API 错误 {response.status_code}: {body.decode()}")
+                    raise RuntimeError(
+                        f"Kimi Code API 错误 {response.status_code}: {body.decode()}"
+                    )
 
                 async for line in response.aiter_lines():
-                    # Kimi Code uses "data:{json}" (no space), standard SSE uses "data: {json}"
-                    if line.startswith("data:"):
-                        data_str = line[5:].strip()
-                    else:
+                    # 标准 SSE 格式 "data: {json}" 或 "data:{json}"
+                    if not line.startswith("data:"):
                         continue
+                    data_str = line[5:].strip()
                     if data_str == "[DONE]":
                         break
                     try:
@@ -111,39 +113,40 @@ async def stream_chat_completion(
                         continue
 
                     if chunk.get("error"):
-                        raise RuntimeError(chunk["error"].get("message", "Kimi API 错误"))
+                        raise RuntimeError(
+                            chunk["error"].get("message", "Kimi Code API 错误")
+                        )
 
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
                     delta = choices[0].get("delta", {})
 
-                    # reasoning_content = thinking phase (we yield it prefixed so UI can distinguish)
+                    # reasoning_content = 推理/思考过程（Kimi Code 独有字段）
                     reasoning = delta.get("reasoning_content")
                     if reasoning:
                         yield f"\x00think\x00{reasoning}"
 
-                    # content = actual reply
+                    # content = 正式回复
                     content = delta.get("content")
                     if content:
                         yield content
 
         except httpx.RequestError as e:
-            raise RuntimeError(f"无法连接到 Kimi API: {e}") from e
+            raise RuntimeError(f"无法连接到 Kimi Code API: {e}") from e
 
 
 async def get_chat_completion(
     system_prompt: str,
     messages: list[dict],
     temperature: float = 0.3,
-    max_tokens: int = 512,
+    max_tokens: int = 4096,
 ) -> str:
-    """Non-streaming chat completion (for internal tasks like memory extraction)."""
+    """非流式调用（用于内部任务，如记忆提取）。"""
     result = ""
     async for token in stream_chat_completion(
         system_prompt, messages, temperature, max_tokens
     ):
-        # Skip thinking tokens for internal tasks
         if not token.startswith("\x00think\x00"):
             result += token
     return result

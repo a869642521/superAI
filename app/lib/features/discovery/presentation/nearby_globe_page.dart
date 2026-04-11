@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/discovery/widgets/user_avatar.dart';
@@ -121,8 +122,8 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     final dt = (elapsed - _lastTickTime!).inMicroseconds / 1e6;
     _lastTickTime = elapsed;
 
-    // 拖拽中 或 已选中头像（卡片展示中）→ 冻结地球，停止一切旋转
-    if (dt <= 0 || dt > 0.05 || _isDragging || _selected != null) return;
+    // 拖拽中 → 暂停旋转；选中卡片时地球继续慢转
+    if (dt <= 0 || dt > 0.05 || _isDragging) return;
 
     final decay = exp(-3.2 * dt);
     setState(() {
@@ -169,17 +170,25 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
+  /// 与 [MainScaffold] 一致：extendBody 下内容铺满屏底，需把操作区抬到悬浮导航栏之上。
+  /// bottomNavigationBar 为 `Padding(bottom:20) + 高68` → 距屏底约 88px 到导航顶。
+  static const double _kMainNavBarReserve =
+      20.0 + 68.0 + 24.0; // 外边距 + 导航条 + 与导航的间距
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       // 使用 LayoutBuilder 获取实际可用区域，避免 MediaQuery 包含导航栏高度
       final w = constraints.maxWidth;
       final h = constraints.maxHeight;
+      final bottomSafe = MediaQuery.paddingOf(context).bottom;
+      final globeActionsBottom = _kMainNavBarReserve + bottomSafe;
 
       // 球半径：取宽高较小值的 42%，确保地球完整显示在屏幕内
       _globeR = (w < h ? w : h) * 0.42;
-      // 球心：水平居中，垂直居中偏上一点（留出底部气泡卡片空间）
-      _globeCenter = Offset(w / 2, h * 0.46);
+      // 球心：水平居中，整体下移 80px
+      // 相对基准下移 60px（原 +80，整体上移 20px）
+      _globeCenter = Offset(w / 2, h * 0.42 + 60.0);
 
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -225,17 +234,19 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
               left: 0,
               right: 0,
               child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ShaderMask(
-                      shaderCallback: (bounds) => const LinearGradient(
-                        colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ).createShader(bounds),
-                      child: const Text(
-                        '在全球寻找你的',
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ShaderMask(
+                        shaderCallback: (bounds) => const LinearGradient(
+                          colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ).createShader(bounds),
+                        child: const Text(
+                          '在全球寻找你的',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 24,
@@ -265,7 +276,8 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
                         ),
                       ),
                     ),
-                  ],
+                    ],
+                  ),
                 ),
               ).animate().fadeIn(duration: 700.ms).slideY(begin: -0.12, curve: Curves.easeOut),
             ),
@@ -290,54 +302,80 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
             // ④ 球面头像标记
             ..._buildMarkers(_globeCenter, _globeR),
 
-            // ⑤ 底部提示
+            // ④½ 底部「推荐 / 附近 / 随机」快捷图标（主导航栏之上）
             Positioned(
-              bottom: 20,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Text(
-                  '拖动旋转  探索全球 AI 伙伴',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: StarpathColors.onSurfaceVariant
-                        .withValues(alpha: 0.55),
-                    letterSpacing: 0.5,
+              left: 24,
+              right: 24,
+              // 相对「-28-80」再上移 50px → bottom 增加 50
+              bottom: globeActionsBottom - 28 - 30,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _GlobeMiniIcon(
+                    icon: Icons.auto_awesome_rounded,
+                    label: '推荐',
+                    gradientColors: const [
+                      Color(0xFF7C3AED),
+                      Color(0xFFEC4899),
+                    ],
+                    onTap: () {},
                   ),
+                  const SizedBox(width: 28),
+                  _GlobeMiniIcon(
+                    icon: Icons.near_me_rounded,
+                    label: '附近',
+                    gradientColors: const [
+                      Color(0xFF0EA5E9),
+                      Color(0xFF10B981),
+                    ],
+                    onTap: () {},
+                  ),
+                  const SizedBox(width: 28),
+                  _GlobeMiniIcon(
+                    icon: Icons.shuffle_rounded,
+                    label: '随机',
+                    gradientColors: const [
+                      Color(0xFF8B5CF6),
+                      Color(0xFF06B6D4),
+                    ],
+                    onTap: () {},
+                  ),
+                ],
+              ),
+            ).animate().fadeIn(delay: 520.ms, duration: 420.ms).slideY(
+                  begin: 0.15,
+                  curve: Curves.easeOut,
                 ),
-              ).animate().fadeIn(delay: 800.ms, duration: 600.ms),
-            ),
 
-          // ⑥ 气泡卡片：水平居中，宽度随内容收缩（不拉满屏）
+          // ⑤ 气泡卡片：避开底部快捷图标 + 主导航栏占位
           Positioned(
-            top: 68,
-            left: 0,
-            right: 0,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 260),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, -0.08),
-                        end: Offset.zero,
-                      ).animate(anim),
-                      child: child,
-                    ),
+            top: 0,
+            bottom: globeActionsBottom + 92,
+            left: 16,
+            right: 16,
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 260),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, anim) => FadeTransition(
+                  opacity: anim,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, -0.08),
+                      end: Offset.zero,
+                    ).animate(anim),
+                    child: child,
                   ),
-                  child: _selected != null
-                      ? _buildBubbleCard(_selected!,
-                          key: ValueKey(_selected!.id))
-                      : const SizedBox.shrink(key: ValueKey('empty')),
                 ),
+                child: _selected != null
+                    ? _buildBubbleCard(_selected!,
+                        key: ValueKey(_selected!.id))
+                    : const SizedBox.shrink(key: ValueKey('empty')),
               ),
             ),
           ),
+
           ],
         ),
       );
@@ -422,11 +460,10 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     '未来预测家，洞察时代的脉搏',
   ];
 
-  /// 气泡卡片：正方形封面 + 固定水平内边距，总宽不随屏幕拉满
-  static const double _kBubbleCoverSide = 152.0;
-  static const double _kBubbleHPad = 14.0;
-  static const double _kBubbleCardWidth =
-      _kBubbleCoverSide + _kBubbleHPad * 2;
+  /// 气泡卡片：仅封面区域 1.5×，内边距与字号等保持初版
+  static const double _kBubbleCoverSide = 152.0 * 1.5;
+  static const double _kBubbleInset = 14.0;
+  static const double _kBubbleCardWidth = _kBubbleCoverSide + _kBubbleInset * 2;
 
   static const List<String> _kBubbleIpImages = [
     'images/ip0.png', 'images/ip1.png', 'images/ip2.png', 'images/ip3.png',
@@ -467,7 +504,11 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
             // ── 顶部：头像 + 名称 + 地点（左）｜关闭按钮（右）──────
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  _kBubbleHPad, _kBubbleHPad, _kBubbleHPad - 4, 10),
+                _kBubbleInset,
+                _kBubbleInset,
+                _kBubbleInset - 4,
+                10,
+              ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -516,7 +557,6 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
                       ],
                     ),
                   ),
-                  // 关闭按钮（卡片右上角）
                   GestureDetector(
                     onTap: () => setState(() => _selected = null),
                     child: Container(
@@ -545,7 +585,7 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
 
             // ── 封面图 ─────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: _kBubbleHPad),
+              padding: const EdgeInsets.symmetric(horizontal: _kBubbleInset),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
                 child: SizedBox(
@@ -606,7 +646,7 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
             // ── AI 伙伴名称 + 描述 ─────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  _kBubbleHPad, 12, _kBubbleHPad, 0),
+                  _kBubbleInset, 12, _kBubbleInset, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -638,9 +678,9 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
             // ── 前往聊天 按钮 ──────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  _kBubbleHPad, 12, _kBubbleHPad, _kBubbleHPad),
+                  _kBubbleInset, 12, _kBubbleInset, _kBubbleInset),
               child: GestureDetector(
-                onTap: () {},
+                onTap: () => context.push('/chat/agent/${agent.id}'),
                 child: Container(
                   alignment: Alignment.center,
                   padding:
@@ -1004,6 +1044,102 @@ class _SoulMarker extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ── 地球下方快捷图标（推荐 / 附近 / 随机）──────────────────────────────────────
+
+class _GlobeMiniIcon extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final List<Color> gradientColors;
+  final VoidCallback onTap;
+
+  const _GlobeMiniIcon({
+    required this.icon,
+    required this.label,
+    required this.gradientColors,
+    required this.onTap,
+  });
+
+  @override
+  State<_GlobeMiniIcon> createState() => _GlobeMiniIconState();
+}
+
+class _GlobeMiniIconState extends State<_GlobeMiniIcon> {
+  bool _pressed = false;
+
+  /// 略小于 1.5× 初版；下方文案字号不变。
+  static const double _circleSide = 60;
+  static const double _glyphSize = 30;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.gradientColors;
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.92 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: _circleSide,
+              height: _circleSide,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    g[0].withValues(alpha: 0.92),
+                    g[1].withValues(alpha: 0.82),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.38),
+                  width: 1.1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: g[0].withValues(alpha: 0.45),
+                    blurRadius: 18,
+                    offset: const Offset(0, 5),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.22),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Icon(
+                widget.icon,
+                size: _glyphSize,
+                color: Colors.white.withValues(alpha: 0.95),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: Colors.white.withValues(alpha: 0.65),
+                height: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

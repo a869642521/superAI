@@ -1,5 +1,3 @@
-import 'dart:math';
-import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -71,24 +69,10 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage>
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
     return Scaffold(
       backgroundColor: StarpathColors.surface,
       body: Stack(
         children: [
-          // ── 右上角深紫同心圆雷达背景（仅发现/关注 Tab 显示）──────────────
-          if (_navIndex != 2)
-            Positioned(
-              right: -size.width * 0.35,
-              top: -size.width * 0.25,
-              child: IgnorePointer(
-                child: CustomPaint(
-                  size: Size(size.width * 1.1, size.width * 1.1),
-                  painter: const _RadarBgPainter(),
-                ),
-              ),
-            ),
-
           // ── 附近 Tab：3D 地球 ─────────────────────────────────────────────
           if (_navIndex == 2)
             const Positioned.fill(child: NearbyGlobePage()),
@@ -129,17 +113,9 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage>
       floating: true,
       snap: true,
       pinned: false,
-      backgroundColor: Colors.transparent,
+      backgroundColor: StarpathColors.surface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      flexibleSpace: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
-            color: StarpathColors.surface.withValues(alpha: 0.88),
-          ),
-        ),
-      ),
       title: Row(
         children: [
           // Left: search
@@ -229,93 +205,88 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage>
   // ── 附近 Tab 顶栏（无 Scrollable，不抢手势） ────────────────────────────────
 
   Widget _buildGlobeTopBar() {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          height: kToolbarHeight,
-          color: StarpathColors.surface.withValues(alpha: 0.88),
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.search_rounded, size: 24),
-                color: StarpathColors.onSurfaceVariant,
-                onPressed: () {},
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              ),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(_navTabs.length, (i) {
-                    final selected = i == _navIndex;
-                    final (emoji, label) = _navTabs[i];
-                    return GestureDetector(
-                      onTap: () => setState(() => _navIndex = i),
-                      behavior: HitTestBehavior.opaque,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            AnimatedDefaultTextStyle(
-                              duration: const Duration(milliseconds: 200),
-                              style: TextStyle(
-                                fontSize: selected ? 16 : 15,
-                                fontWeight: selected
-                                    ? FontWeight.w700
-                                    : FontWeight.w400,
-                                color: selected
-                                    ? StarpathColors.onSurface
-                                    : StarpathColors.onSurfaceVariant,
-                                letterSpacing: selected ? -0.3 : 0,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    emoji,
-                                    style: TextStyle(
-                                      fontSize: selected ? 15 : 14,
-                                      height: 1,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(label),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              height: 2,
-                              width: selected ? 20 : 0,
-                              decoration: BoxDecoration(
-                                gradient: selected
-                                    ? StarpathColors.selectedGradient
-                                    : null,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.notifications_outlined, size: 24),
-                color: StarpathColors.onSurfaceVariant,
-                onPressed: () {},
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              ),
-            ],
+    return Container(
+      height: kToolbarHeight,
+      color: Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.search_rounded, size: 24),
+            color: StarpathColors.onSurfaceVariant,
+            onPressed: () {},
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           ),
-        ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_navTabs.length, (i) {
+                final selected = i == _navIndex;
+                final (emoji, label) = _navTabs[i];
+                return GestureDetector(
+                  onTap: () => setState(() => _navIndex = i),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 200),
+                          style: TextStyle(
+                            fontSize: selected ? 16 : 15,
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w400,
+                            color: selected
+                                ? StarpathColors.onSurface
+                                : StarpathColors.onSurfaceVariant,
+                            letterSpacing: selected ? -0.3 : 0,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                emoji,
+                                style: TextStyle(
+                                  fontSize: selected ? 15 : 14,
+                                  height: 1,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(label),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          height: 2,
+                          width: selected ? 20 : 0,
+                          decoration: BoxDecoration(
+                            gradient: selected
+                                ? StarpathColors.selectedGradient
+                                : null,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined, size: 24),
+            color: StarpathColors.onSurfaceVariant,
+            onPressed: () {},
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+        ],
       ),
     );
   }
@@ -734,66 +705,4 @@ class _EmptyView extends StatelessWidget {
       ),
     );
   }
-}
-
-// ── 右上角深紫雷达同心圆背景 ────────────────────────────────────────────────────
-
-class _RadarBgPainter extends CustomPainter {
-  const _RadarBgPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final maxR = size.width / 2;
-
-    // 1. 中心径向渐变光晕
-    final glowPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0xFF4A1A7A).withValues(alpha: 0.72),
-          const Color(0xFF2D0E55).withValues(alpha: 0.48),
-          const Color(0xFF1A0828).withValues(alpha: 0.22),
-          Colors.transparent,
-        ],
-        stops: const [0.0, 0.35, 0.65, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: maxR));
-    canvas.drawCircle(center, maxR, glowPaint);
-
-    // 2. 同心虚线圆（5 圈，从内向外渐隐）
-    const ringCount = 5;
-    for (int i = 1; i <= ringCount; i++) {
-      final t = i / ringCount;
-      final r = maxR * t;
-      final alpha = (1.0 - t * 0.75).clamp(0.0, 1.0);
-
-      final ringPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.8
-        ..color = const Color(0xFFCC97FF).withValues(alpha: alpha * 0.35);
-
-      const dashAngle = 0.045;
-      const gapAngle = 0.025;
-      double angle = 0;
-      while (angle < 2 * pi) {
-        canvas.drawArc(
-          Rect.fromCircle(center: center, radius: r),
-          angle,
-          dashAngle,
-          false,
-          ringPaint,
-        );
-        angle += dashAngle + gapAngle;
-      }
-    }
-
-    // 3. 最内圈实线（更亮）
-    final innerPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..color = const Color(0xFFCC97FF).withValues(alpha: 0.45);
-    canvas.drawCircle(center, maxR * 0.18, innerPaint);
-  }
-
-  @override
-  bool shouldRepaint(_RadarBgPainter old) => false;
 }

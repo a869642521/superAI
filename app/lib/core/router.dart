@@ -7,6 +7,7 @@ import 'package:starpath/features/auth/presentation/login_page.dart';
 import 'package:starpath/features/onboarding/presentation/onboarding_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_create_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_studio_page.dart';
+import 'package:starpath/features/agent_studio/presentation/partner_background_editor_page.dart';
 import 'package:starpath/features/chat/presentation/chat_list_page.dart';
 import 'package:starpath/features/chat/presentation/chat_detail_page.dart';
 import 'package:starpath/features/chat/presentation/user_dm_detail_page.dart';
@@ -17,6 +18,7 @@ import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/creation/presentation/create_card_page.dart';
 import 'package:starpath/features/profile/presentation/profile_page.dart';
 import 'package:starpath/features/profile/presentation/wallet_page.dart';
+import 'package:starpath/shared/widgets/animated_navigation_shell_body.dart';
 import 'package:starpath/shared/widgets/main_scaffold.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -71,9 +73,15 @@ GoRouter createRouter(WidgetRef ref) {
         path: '/onboarding',
         builder: (context, state) => const OnboardingPage(),
       ),
-      StatefulShellRoute.indexedStack(
+      StatefulShellRoute(
         builder: (context, state, navigationShell) {
           return MainScaffold(navigationShell: navigationShell);
+        },
+        navigatorContainerBuilder: (context, navigationShell, children) {
+          return AnimatedNavigationShellBody(
+            currentIndex: navigationShell.currentIndex,
+            children: children,
+          );
         },
         branches: [
           StatefulShellBranch(
@@ -121,6 +129,11 @@ GoRouter createRouter(WidgetRef ref) {
         builder: (context, state) => const AgentCreatePage(),
       ),
       GoRoute(
+        path: '/agents/background-editor',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const PartnerBackgroundEditorPage(),
+      ),
+      GoRoute(
         path: '/dm/:peerId',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) {
@@ -142,6 +155,14 @@ GoRouter createRouter(WidgetRef ref) {
         builder: (context, state) {
           final id = state.pathParameters['conversationId']!;
           return ChatDetailPage(conversationId: id);
+        },
+      ),
+      GoRoute(
+        path: '/chat/agent/:agentId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final agentId = state.pathParameters['agentId']!;
+          return ChatDetailPage(agentId: agentId);
         },
       ),
       GoRoute(

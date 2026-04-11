@@ -6,8 +6,7 @@ import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/agent_studio/data/agent_providers.dart';
 import 'package:starpath/features/agent_studio/data/agent_template_categories.dart';
 import 'package:starpath/features/agent_studio/domain/agent_model.dart';
-import 'package:starpath/features/chat/data/chat_providers.dart';
-
+import 'package:starpath/features/agent_studio/presentation/partner_page_background.dart';
 Color _hexColor(String hex) {
   hex = hex.replaceFirst('#', '');
   return Color(int.parse('FF$hex', radix: 16));
@@ -17,7 +16,7 @@ Color _hexColor(String hex) {
 final List<AgentModel> _previewAgents = [
   AgentModel(
     id: 'preview-1', userId: 'preview', name: '旅行达人 Luna', emoji: '🌍',
-    personality: const ['热情', '博学', '幽默'], bio: '环游世界的旅行顾问',
+    personality: const ['热情', '博学', '幽默'], bio: '环游世界的旅行顾问，带你发现世界之美',
     templateId: 'travel-buddy',
     gradientStart: '#00B4D8', gradientEnd: '#0077B6',
     isPublic: true, createdAt: DateTime(2025),
@@ -59,16 +58,30 @@ final List<AgentModel> _previewAgents = [
   ),
   AgentModel(
     id: 'preview-7', userId: 'preview', name: '萌宠 团子', emoji: '🐱',
-    personality: const ['可爱', '调皮', '粘人'], bio: '爱撒娇的虚拟宠物',
+    personality: const ['可爱', '调皮', '粘人'], bio: '爱撒娇的虚拟宠物伴侣',
     templateId: 'pet-companion',
     gradientStart: '#FF85A2', gradientEnd: '#FFAA85',
     isPublic: true, createdAt: DateTime(2025),
   ),
   AgentModel(
     id: 'preview-8', userId: 'preview', name: '智者 深思', emoji: '🦉',
-    personality: const ['深邃', '睿智', '冷静'], bio: '陪你思考人生',
+    personality: const ['深邃', '睿智', '冷静'], bio: '陪你思考人生的哲学智者',
     templateId: 'philosopher',
     gradientStart: '#8E44AD', gradientEnd: '#3498DB',
+    isPublic: true, createdAt: DateTime(2025),
+  ),
+  AgentModel(
+    id: 'preview-9', userId: 'preview', name: '美食家 香满', emoji: '🍜',
+    personality: const ['热爱美食', '分享', '讲究'], bio: '发现城市里的每一口好滋味',
+    templateId: 'foodie',
+    gradientStart: '#FF6B35', gradientEnd: '#F7931E',
+    isPublic: true, createdAt: DateTime(2025),
+  ),
+  AgentModel(
+    id: 'preview-10', userId: 'preview', name: '音乐人 弦歌', emoji: '🎵',
+    personality: const ['感性', '创意', '随性'], bio: '用音乐记录每一刻心情',
+    templateId: 'musician',
+    gradientStart: '#C471ED', gradientEnd: '#12C2E9',
     isPublic: true, createdAt: DateTime(2025),
   ),
 ];
@@ -85,78 +98,73 @@ const List<String> kPartnerCoverImages = [
   'images/ip7.png',
 ];
 
-/// 按顺序循环分配封面，避免同屏出现重复图片。
+/// 按顺序循环分配社区封面，避免同屏出现重复图片。
 String partnerCoverImageByIndex(int index) =>
     kPartnerCoverImages[index % kPartnerCoverImages.length];
 
-/// 封面图：加载失败时回退到 ip1（避免新增图片后仅热重载、AssetManifest 未更新时出现红叉）。
-class _PartnerCoverImage extends StatelessWidget {
-  final String assetPath;
+/// AI 伙伴卡片专用透明 PNG，循环分配。
+const List<String> kAgentCoverImages = [
+  'images/png/ai1.png',
+  'images/png/ai2.png',
+  'images/png/ai3.png',
+];
 
-  const _PartnerCoverImage({required this.assetPath});
+/// 按顺序循环分配 AI 伙伴封面。
+String agentCoverImageByIndex(int index) =>
+    kAgentCoverImages[index % kAgentCoverImages.length];
+
+/// Spotlight 角色破框上移量；页眉副标题间距与之对齐以便与兔耳同高。
+const double _kSpotlightTopBleed = 42.0;
+
+/// AI 伙伴网格卡片封面（ip*.png，加载失败回退首张）。
+class _AgentCoverImage extends StatelessWidget {
+  final int index;
+  const _AgentCoverImage({required this.index});
 
   @override
   Widget build(BuildContext context) {
+    final path = partnerCoverImageByIndex(index);
     return Image.asset(
-      assetPath,
+      path,
       fit: BoxFit.cover,
       gaplessPlayback: true,
-      errorBuilder: (_, __, ___) {
-        if (assetPath == kPartnerCoverImages[0]) {
-          return const ColoredBox(
-            color: StarpathColors.surfaceContainerHigh,
-            child: Center(
-              child: Icon(
-                Icons.image_not_supported_outlined,
-                color: StarpathColors.onSurfaceVariant,
-                size: 40,
-              ),
-            ),
-          );
-        }
-        return _PartnerCoverImage(assetPath: kPartnerCoverImages[0]);
-      },
+      errorBuilder: (_, __, ___) => Image.asset(
+        kPartnerCoverImages[0],
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      ),
     );
   }
 }
 
 class _SpotlightCommunity {
-  final String title;
-  final String description;
-  final int memberCount;
+  final String ipName;
+  final String personality;
+  final String tag;
+  /// 对应 preview agent id，点击进入 AI 聊天页 `/chat/agent/:agentId`。
+  final String agentId;
 
   const _SpotlightCommunity({
-    required this.title,
-    required this.description,
-    required this.memberCount,
+    required this.ipName,
+    required this.personality,
+    required this.tag,
+    required this.agentId,
   });
 }
 
 const List<_SpotlightCommunity> _kSpotlightCommunities = [
   _SpotlightCommunity(
-    title: '骑行同好社',
-    description: '和骑友分享路线、装备与周末远征计划，一起探索城市与郊外。',
-    memberCount: 124,
+    ipName: '云朵骑兔 啵比',
+    personality: '外向 · 爱冒险，周末最爱拉你刷一条新路线，聊装备也不腻。',
+    tag: '旅行',
+    agentId: 'preview-1',
   ),
   _SpotlightCommunity(
-    title: '音乐创作圈',
-    description: '从 Lo-Fi 到电子乐，交流编曲灵感与同好作品，找到你的声音。',
-    memberCount: 89,
-  ),
-  _SpotlightCommunity(
-    title: 'AI 学习营',
-    description: 'Prompt、模型与工具链实战，和伙伴一起把想法做成产品。',
-    memberCount: 256,
-  ),
-  _SpotlightCommunity(
-    title: '夜跑打卡组',
-    description: '每晚互相督促打卡，安全路线与配速心得，越跑越轻松。',
-    memberCount: 67,
-  ),
-  _SpotlightCommunity(
-    title: '读书与思辨',
-    description: '每月共读一本书，线上圆桌讨论，把阅读变成对话。',
-    memberCount: 142,
+    ipName: 'Lo-Fi 小音',
+    personality: '细腻 · 慢性子，陪你从和弦到编曲，把灵感落成完整 Demo。',
+    tag: '创作',
+    agentId: 'preview-3',
   ),
 ];
 
@@ -208,9 +216,9 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                mainAxisSpacing: 16,
+                mainAxisSpacing: 14,
                 crossAxisSpacing: 14,
-                mainAxisExtent: 340,
+                mainAxisExtent: 280,
               ),
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _AgentCard(
@@ -230,62 +238,114 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
   Widget build(BuildContext context) {
     final agentsAsync = ref.watch(myAgentsProvider);
 
-    return Scaffold(
-      backgroundColor: StarpathColors.surface,
-      body: agentsAsync.when(
-        loading: () => CustomScrollView(
-          slivers: [
-            _headerSliver(),
-            _spotlightCardsSliver(),
-            _chipsSliver(),
-            const SliverFillRemaining(
-              child: Center(
-                child: CircularProgressIndicator(color: StarpathColors.primary),
+    // 透明状态栏 + 浅色图标
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemStatusBarContrastEnforced: false,
+      ),
+      // ── 将渐变置于 Scaffold 外层，从屏幕最顶端（含状态栏）开始，彻底消除断层 ──
+      child: Builder(
+        builder: (context) {
+          const gradientH = 200.0;
+          return Stack(
+            children: [
+              // 全屏底色
+              const Positioned.fill(
+                child: ColoredBox(color: StarpathColors.surface),
               ),
-            ),
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
-          ],
-        ),
-        error: (_, __) => _buildScrollView(_previewAgents),
-        data: (agents) =>
-            _buildScrollView(agents.isEmpty ? _previewAgents : agents),
+              // 顶部固定渐变带（不随滚动变化的装饰色）
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: gradientH,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topRight,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0x334D2E8B),
+                          Color(0x227C3AED),
+                          Color(0x009B72FF),
+                        ],
+                        stops: [0.0, 0.55, 1.0],
+                      ),
+                    ),
+                    child: SizedBox.expand(),
+                  ),
+                ),
+              ),
+              // Scaffold 透明，内容正常显示在渐变上
+              Scaffold(
+                backgroundColor: Colors.transparent,
+                body: agentsAsync.when(
+                  loading: () => CustomScrollView(
+                    slivers: [
+                      _headerSliver(),
+                      _spotlightCardsSliver(),
+                      _chipsSliver(),
+                      const SliverFillRemaining(
+                        child: Center(
+                          child: CircularProgressIndicator(
+                              color: StarpathColors.primary),
+                        ),
+                      ),
+                      const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                    ],
+                  ),
+                  error: (_, __) => _buildScrollView(_previewAgents),
+                  data: (agents) {
+                    // 真实 agent 优先；不足 10 个时用预览卡片补全到 10 个
+                    if (agents.length >= 10) return _buildScrollView(agents);
+                    final realIds = agents.map((a) => a.id).toSet();
+                    final fills = _previewAgents
+                        .where((p) => !realIds.contains(p.id))
+                        .take(10 - agents.length)
+                        .toList();
+                    return _buildScrollView([...agents, ...fills]);
+                  },
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _headerSliver() {
     final top = MediaQuery.paddingOf(context).top;
+    final titleStyle = Theme.of(context).textTheme.headlineMedium;
+    final titleSize = (titleStyle?.fontSize ?? 28) + 8;
     return SliverToBoxAdapter(
       child: Padding(
-        padding: EdgeInsets.fromLTRB(20, top + 20, 20, 18),
+        padding: EdgeInsets.fromLTRB(20, top + 16, 20, 8),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // ── 标题与副标题 ──────────────────────────────────────────
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '我的 AI 伙伴',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: StarpathColors.onSurface,
-                          height: 1.1,
-                        ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '发现并创建属于你的智能伙伴',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: StarpathColors.onSurfaceVariant,
-                        ),
-                  ),
-                ],
+              child: Text(
+                '我的 AI 伙伴',
+                style: titleStyle?.copyWith(
+                      fontSize: titleSize,
+                      fontWeight: FontWeight.w800,
+                      color: StarpathColors.onSurface,
+                      height: 1.1,
+                    ) ??
+                    TextStyle(
+                      fontSize: titleSize,
+                      fontWeight: FontWeight.w800,
+                      color: StarpathColors.onSurface,
+                      height: 1.1,
+                    ),
               ),
             ),
-            const SizedBox(width: 12),
-            // ── 创建按钮 ─────────────────────────────────────────────
+            const SizedBox(width: 4),
             GestureDetector(
               onTap: _openCreate,
               child: Container(
@@ -335,27 +395,43 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
         builder: (context, constraints) {
           // 卡片宽 = 可用宽 - 左侧内边距(20) - 右侧"下一张"露出量(36) - 卡片间距(12)
           final cardWidth = constraints.maxWidth - 20 - 36 - 12;
-          const cardHeight = 210.0;
-          // 角色图向上「破框」预留空间
-          const spotlightTopBleed = 42.0;
-          return SizedBox(
-            height: cardHeight + 20 + spotlightTopBleed,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              clipBehavior: Clip.none,
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-              itemCount: _kSpotlightCommunities.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 14),
-              itemBuilder: (context, i) {
-                return _SpotlightCommunityCard(
-                  data: _kSpotlightCommunities[i],
-                  imageAsset: partnerCoverImageByIndex(i),
-                  width: cardWidth,
-                  height: cardHeight,
-                  topBleed: spotlightTopBleed,
-                );
-              },
-            ),
+          const cardHeight = 150.0; // 原 210，减少 60px
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 与首张卡片左缘对齐，处于破框兔耳一带（红框示意区）
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+                child: Text(
+                  '发现并创建属于你的智能伙伴',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: StarpathColors.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              SizedBox(
+                height: cardHeight + 20 + _kSpotlightTopBleed,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  clipBehavior: Clip.none,
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                  itemCount: _kSpotlightCommunities.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 14),
+                  itemBuilder: (context, i) {
+                    return _SpotlightCommunityCard(
+                      data: _kSpotlightCommunities[i],
+                      imageAsset: agentCoverImageByIndex(i),
+                      width: cardWidth,
+                      height: cardHeight,
+                      topBleed: _kSpotlightTopBleed,
+                      isFirstCard: i == 0,
+                      isSecondCard: i == 1,
+                    );
+                  },
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -481,13 +557,18 @@ class _SpotlightCommunityCard extends StatefulWidget {
   final double width;
   final double height;
   final double topBleed;
+  /// 首张：与页顶同色紫渐变；第二张：橙→紫粉；其余暖色底
+  final bool isFirstCard;
+  final bool isSecondCard;
 
   const _SpotlightCommunityCard({
     required this.data,
     required this.imageAsset,
     required this.width,
     required this.height,
-    this.topBleed = 42,
+    this.topBleed = _kSpotlightTopBleed,
+    this.isFirstCard = false,
+    this.isSecondCard = false,
   });
 
   @override
@@ -505,6 +586,25 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
     Color(0xFFD4BEA3),
   ];
 
+  /// 第二张长卡：左橙 → 右紫粉（与首张同向：左→右）
+  static const List<Color> _secondCardOrangePinkGradient = [
+    Color(0xFFFF7A3D),
+    Color(0xFFFF9F66),
+    Color(0xFFFF6B9D),
+    Color(0xFFE879F9),
+    Color(0xFFC084FC),
+    Color(0xFFB565F0),
+  ];
+
+  static const List<double> _secondCardOrangePinkStops = [
+    0.0,
+    0.22,
+    0.45,
+    0.62,
+    0.82,
+    1.0,
+  ];
+
   Widget _characterImage(double w, double h) {
     return Image.asset(
       widget.imageAsset,
@@ -514,7 +614,7 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
       height: h,
       gaplessPlayback: true,
       errorBuilder: (_, __, ___) => Image.asset(
-        kPartnerCoverImages[0],
+        kAgentCoverImages[0],
         fit: BoxFit.contain,
         alignment: Alignment.bottomCenter,
         width: w,
@@ -542,14 +642,7 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
         onTapUp: (_) {
           setState(() => _pressed = false);
           HapticFeedback.selectionClick();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('「${d.title}」即将开放'),
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 1),
-              backgroundColor: StarpathColors.surfaceContainerHighest,
-            ),
-          );
+          context.push('/chat/agent/${d.agentId}');
         },
         onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedScale(
@@ -572,14 +665,19 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
                     duration: const Duration(milliseconds: 180),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(26),
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: _warmCardGradient,
-                      ),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.35),
-                        width: 0.8,
+                      gradient: LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: widget.isFirstCard
+                            ? PartnerPageBackgroundConfig.gradientColors
+                            : widget.isSecondCard
+                                ? _secondCardOrangePinkGradient
+                                : _warmCardGradient,
+                        stops: widget.isFirstCard
+                            ? PartnerPageBackgroundConfig.gradientStops
+                            : widget.isSecondCard
+                                ? _secondCardOrangePinkStops
+                                : null,
                       ),
                       boxShadow: _hovered
                           ? [
@@ -614,78 +712,107 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // 左上：人数胶囊
+                                  // 左上：标签（渐变描边 + 微光）
                                   Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 9, vertical: 5),
+                                        horizontal: 10, vertical: 5),
                                     decoration: BoxDecoration(
-                                      color:
-                                          Colors.black.withValues(alpha: 0.48),
-                                      borderRadius: BorderRadius.circular(20),
+                                      borderRadius: BorderRadius.circular(10),
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          Colors.white
+                                              .withValues(alpha: 0.22),
+                                          Colors.white
+                                              .withValues(alpha: 0.08),
+                                        ],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      border: Border.all(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.55),
+                                        width: 1,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.12),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
                                     ),
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        const Icon(
-                                          Icons.person_outline_rounded,
-                                          size: 14,
-                                          color: Colors.white,
+                                        Icon(
+                                          Icons.sell_rounded,
+                                          size: 13,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.95),
                                         ),
                                         const SizedBox(width: 5),
                                         Text(
-                                          '${d.memberCount}',
+                                          d.tag,
                                           style: const TextStyle(
                                             fontSize: 12,
                                             fontWeight: FontWeight.w800,
                                             color: Colors.white,
                                             height: 1,
+                                            letterSpacing: 0.3,
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
                                   const Spacer(),
-                                  // 左下：深色信息块（标题 + 说明，两行）
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black
-                                          .withValues(alpha: 0.52),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          d.title,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w800,
-                                            color: Colors.white,
-                                            height: 1.2,
-                                            letterSpacing: -0.2,
-                                          ),
+                                  // 左下：IP 名称 + 性格介绍（无磨砂底，靠阴影保证可读）
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        d.ipName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                          height: 1.2,
+                                          letterSpacing: -0.3,
+                                          shadows: [
+                                            Shadow(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.35),
+                                              blurRadius: 12,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(height: 5),
-                                        Text(
-                                          d.description,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            height: 1.35,
-                                            color: Colors.white
-                                                .withValues(alpha: 0.88),
-                                          ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        d.personality,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          height: 1.4,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.6),
+                                          shadows: [
+                                            Shadow(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.28),
+                                              blurRadius: 8,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -728,30 +855,13 @@ class _AgentCard extends ConsumerStatefulWidget {
 class _AgentCardState extends ConsumerState<_AgentCard> {
   bool _pressing = false;
 
-  Future<void> _startChat() async {
+  void _startChat() {
     HapticFeedback.lightImpact();
-    try {
-      final repo = ref.read(chatRepositoryProvider);
-      final conv = await repo.createConversation(widget.agent.id);
-      if (mounted) {
-        ref.invalidate(conversationsProvider);
-        context.push('/chat/${conv.id}');
-      }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('启动对话失败，请确认后端服务正在运行'),
-            backgroundColor: StarpathColors.surfaceContainerHigh,
-          ),
-        );
-      }
-    }
+    context.push('/chat/agent/${widget.agent.id}');
   }
 
   @override
   Widget build(BuildContext context) {
-    final gradStart = _hexColor(widget.agent.gradientStart);
     final gradEnd = _hexColor(widget.agent.gradientEnd);
     final topLabel = categoryForTemplateId(widget.agent.templateId) ??
         (widget.agent.personality.isNotEmpty
@@ -773,48 +883,77 @@ class _AgentCardState extends ConsumerState<_AgentCard> {
         duration: const Duration(milliseconds: 120),
         curve: Curves.easeOut,
         child: Container(
-          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: StarpathColors.surfaceContainer.withValues(alpha: 0.82),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: StarpathColors.outlineVariant, width: 1),
+            color: StarpathColors.surfaceContainer.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: StarpathColors.outlineVariant, width: 0.8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── 顶部：分类标签 ─────────────────────────────────────
-              Text(
-                topLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.8),
-                ),
-              ),
-              const SizedBox(height: 8),
-              // ── 封面图（填充剩余空间）─────────────────────────────
+              // ── 正方形封面图区（带左上角胶囊 + 右上角聊天按钮）──
               Expanded(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(20)),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      _PartnerCoverImage(
-                        assetPath: partnerCoverImageByIndex(widget.imageIndex),
+                      _AgentCoverImage(index: widget.imageIndex),
+                      // 左上角分类胶囊
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.42),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            topLabel,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                              height: 1,
+                            ),
+                          ),
+                        ),
                       ),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              gradStart.withValues(alpha: 0.15),
-                              gradEnd.withValues(alpha: 0.35),
-                            ],
-                            stops: const [0.5, 0.8, 1.0],
+                      // 右上角前往聊天按钮
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: GestureDetector(
+                          onTap: _startChat,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              gradient: StarpathColors.selectedGradient,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: StarpathColors.accentViolet
+                                      .withValues(alpha: 0.35),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: const Text(
+                              '前往',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                height: 1,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -822,87 +961,93 @@ class _AgentCardState extends ConsumerState<_AgentCard> {
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              // ── 名称 ────────────────────────────────────────────────
-              Text(
-                widget.agent.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: StarpathColors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                subtitle.isNotEmpty ? subtitle : ' ',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.4,
-                  color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.8),
-                ),
-              ),
-              const SizedBox(height: 10),
-              // ── 作者头像 + 前往聊天 ────────────────────────────────
-              Row(
-                children: [
-                  // 作者头像（emoji 圆形）
-                  Container(
-                    width: 22,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [gradStart, gradEnd],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                    child: Center(
-                      child: Text(
-                        widget.agent.emoji,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
+              // ── 图片下方文字区 ─────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
                       widget.agent.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: StarpathColors.onSurface,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
+                        height: 1.3,
                         color: StarpathColors.onSurfaceVariant
-                            .withValues(alpha: 0.7),
+                            .withValues(alpha: 0.8),
                       ),
                     ),
-                  ),
-                  // 前往聊天按钮
-                  GestureDetector(
-                    onTap: _startChat,
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        gradient: StarpathColors.selectedGradient,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        '聊天',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                    const SizedBox(height: 6),
+                    // 作者头像 + 名字 + 点赞数
+                    Row(
+                      children: [
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [
+                                gradEnd.withValues(alpha: 0.8),
+                                gradEnd,
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              widget.agent.emoji,
+                              style: const TextStyle(fontSize: 10),
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            widget.agent.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: StarpathColors.onSurfaceVariant
+                                  .withValues(alpha: 0.65),
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.favorite_border_rounded,
+                          size: 12,
+                          color: StarpathColors.onSurfaceVariant
+                              .withValues(alpha: 0.55),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${(widget.imageIndex + 1) * 38}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: StarpathColors.onSurfaceVariant
+                                .withValues(alpha: 0.65),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),

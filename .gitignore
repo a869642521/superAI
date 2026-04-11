@@ -30,3 +30,4 @@ server/services/ai-service/.env
 
 # ─── Docker ──────────────────────────────────────────────────────
 docker-compose.override.yml
+server/services/ai-service/venv/

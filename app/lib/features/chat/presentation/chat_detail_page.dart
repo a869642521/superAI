@@ -1,32 +1,94 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:video_player/video_player.dart';
 import 'package:starpath/core/constants.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/chat/data/chat_providers.dart';
 import 'package:starpath/features/chat/domain/chat_model.dart';
-import 'package:starpath/shared/widgets/aura_avatar.dart';
 
 Color _hexToColor(String hex) {
   hex = hex.replaceFirst('#', '');
   return Color(int.parse('FF$hex', radix: 16));
 }
 
-class ChatDetailPage extends ConsumerStatefulWidget {
-  final String conversationId;
+/// ip 封面图列表（同 agent_studio_page.dart 保持一致）
+const List<String> _kIpAvatars = [
+  'images/ip0.png',
+  'images/ip1.png',
+  'images/ip2.png',
+  'images/ip3.png',
+  'images/ip4.png',
+  'images/ip5.png',
+  'images/ip7.png',
+];
 
-  const ChatDetailPage({super.key, required this.conversationId});
+/// 文字输入栏上方快捷推荐语（emoji + 文案）
+const List<(String emoji, String text)> _kChatQuickSuggests = [
+  ('👋', '你好 请问今天你做了什么呀'),
+  ('🙋', '请介绍一下你自己'),
+  ('📖', '给我讲个故事'),
+];
+
+/// 根据 agentId 取对应 ip 头像路径。
+/// 规则：提取 agentId 末尾数字，若无则取哈希，循环匹配列表。
+String _ipAvatarForAgent(String? agentId) {
+  if (agentId == null || agentId.isEmpty) return _kIpAvatars[0];
+  final digits = RegExp(r'\d+').allMatches(agentId);
+  if (digits.isNotEmpty) {
+    final n = int.parse(digits.last.group(0)!);
+    return _kIpAvatars[n % _kIpAvatars.length];
+  }
+  return _kIpAvatars[agentId.hashCode.abs() % _kIpAvatars.length];
+}
+
+/// 圆形 ip 头像 Widget
+Widget _ipAvatarWidget({required String? agentId, required double size}) {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(size / 2),
+    child: Image.asset(
+      _ipAvatarForAgent(agentId),
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    ),
+  );
+}
+
+class ChatDetailPage extends ConsumerStatefulWidget {
+  /// 直接传会话 ID（优先使用）
+  final String? conversationId;
+
+  /// 仅传 agentId 时，页面内部自动 findOrCreate 会话
+  final String? agentId;
+
+  const ChatDetailPage({
+    super.key,
+    this.conversationId,
+    this.agentId,
+  }) : assert(
+          conversationId != null || agentId != null,
+          'conversationId or agentId is required',
+        );
 
   @override
   ConsumerState<ChatDetailPage> createState() => _ChatDetailPageState();
 }
 
+/// 连接状态展示：WS 已连 / 仅有本地会话（无 WS）/ 仍在初始化
+enum _ChatConnUi { connecting, demo, live }
+
 class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   final _messageController = TextEditingController();
+  final _chatInputFocusNode = FocusNode();
   final _scrollController = ScrollController();
   final List<MessageModel> _messages = [];
 
@@ -38,22 +100,209 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   String _thinkingContent = '';
   bool _showThinking = false;
   bool _showTextInput = false;
+  /// true = 语音沉浸模式（三按钮栏 + 沉浸视图）；false = 聊天文字模式
+  /// 进入时默认语音模式；点键盘切到聊天模式；点麦克风切回语音模式。
+  bool _voiceBarWithMessages = true;
+
+  // 防止无后端时 _isThinking 永不清除：发消息后 60s 若无响应则自动复位
+  static const _kThinkingTimeout = Duration(seconds: 60);
 
   // 已稳定渲染的消息数量（用于区分"新消息"与历史消息）
   int _settledCount = 0;
+
+  // ── 视频背景 ──────────────────────────────────────────────────────────────
+  // ── 角色动画：jq.mp4 = 打招呼（单次），jq2.mp4 = 待机（循环）────────────────
+  late VideoPlayerController _greetCtrl;   // jq.mp4
+  late VideoPlayerController _idleCtrl;    // jq2.mp4
+  bool _greetReady = false;
+  bool _idleReady = false;
+  /// true = 正在播打招呼；false = 待机循环中
+  bool _isGreeting = true;
+
+  // ── 语音识别（默认连续聆听，无弹窗）──────────────────────────────────────────
+  final SpeechToText _stt = SpeechToText();
+  bool _sttAvailable = false;
+  /// 沉浸页实时识别文案（有消息时也可在后台识别并自动发送）
+  String _voiceTranscript = '';
+
+  /// 无历史消息且未切键盘：展示底部语音沉浸栏；有历史消息：始终可语音。
+  /// WebSocket 未连上但 REST 已拿到会话时，不再显示「连接中」。
+  _ChatConnUi get _connUi {
+    if (_isConnected) return _ChatConnUi.live;
+    if (_conversation != null) return _ChatConnUi.demo;
+    return _ChatConnUi.connecting;
+  }
+
+  bool get _shouldRunContinuousVoice =>
+      _sttAvailable &&
+      _conversation != null &&
+      (_messages.isNotEmpty || !_showTextInput);
 
   @override
   void initState() {
     super.initState();
     _loadConversation();
     _messageController.addListener(() => setState(() {}));
+    _initStt();
+    _initBgVideo();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _continuousVoiceWorker();
+    });
+  }
+
+  // ── 视频初始化 ─────────────────────────────────────────────────────────────
+
+  VideoPlayerController _makeCtrl(String asset) => kIsWeb
+      ? VideoPlayerController.networkUrl(Uri.parse('assets/$asset'))
+      : VideoPlayerController.asset(asset);
+
+  Future<void> _initBgVideo() async {
+    _greetCtrl = _makeCtrl('video/jq.mp4');
+    _idleCtrl  = _makeCtrl('video/jq2.mp4');
+    try {
+      // 同时初始化两个控制器
+      await Future.wait([
+        _greetCtrl.initialize(),
+        _idleCtrl.initialize(),
+      ]);
+      await _greetCtrl.setLooping(false);
+      await _greetCtrl.setVolume(0);
+      await _idleCtrl.setLooping(true);
+      await _idleCtrl.setVolume(0);
+
+      _greetCtrl.addListener(_onGreetListener);
+
+      // 进入页面先播打招呼
+      _isGreeting = true;
+      await _greetCtrl.play();
+
+      if (mounted) setState(() { _greetReady = true; _idleReady = true; });
+    } catch (e, st) {
+      debugPrint('[BgVideo] init failed: $e\n$st');
+    }
+  }
+
+  /// 监听打招呼视频：播完后切换为待机循环
+  void _onGreetListener() {
+    if (!mounted) return;
+    final v = _greetCtrl.value;
+    if (!v.isInitialized || v.duration == Duration.zero) return;
+    final ended = !v.isPlaying &&
+        v.position + const Duration(milliseconds: 300) >= v.duration;
+    if (ended && _isGreeting) {
+      _switchToIdle();
+    }
+  }
+
+  Future<void> _switchToIdle() async {
+    if (!mounted) return;
+    setState(() => _isGreeting = false);
+    try {
+      await _greetCtrl.seekTo(Duration.zero); // 归位，下次点击可立即播
+      await _idleCtrl.seekTo(Duration.zero);
+      await _idleCtrl.play();
+    } catch (_) {}
+  }
+
+  /// 用户点击热区：待机中才触发打招呼；打招呼播放中忽略
+  Future<void> _replayBgVideoFromHotZone() async {
+    if (!_greetReady || !_idleReady) return;
+    if (_isGreeting) return; // 打招呼正在播，忽略重复点击
+    try {
+      await _idleCtrl.pause();
+      setState(() => _isGreeting = true);
+      await _greetCtrl.seekTo(Duration.zero);
+      await _greetCtrl.play();
+    } catch (e, st) {
+      debugPrint('[BgVideo] replay failed: $e\n$st');
+      if (mounted) setState(() => _isGreeting = false);
+    }
+  }
+
+  Future<void> _initStt() async {
+    final ok = await _stt.initialize();
+    if (mounted) setState(() => _sttAvailable = ok);
+  }
+
+  void _onSpeechResult(SpeechRecognitionResult result) {
+    if (!mounted) return;
+    final words = result.recognizedWords;
+    setState(() => _voiceTranscript = words);
+    if (result.finalResult && words.trim().isNotEmpty && !_isThinking) {
+      _sendVoiceMessage(words.trim());
+      if (mounted) setState(() => _voiceTranscript = '');
+    }
+  }
+
+  /// 后台循环：满足条件时持续 listen，切键盘或离开时 stop。
+  Future<void> _continuousVoiceWorker() async {
+    while (mounted) {
+      if (!_shouldRunContinuousVoice) {
+        if (_stt.isListening) await _stt.stop();
+        if (mounted) setState(() {});
+        await Future<void>.delayed(const Duration(milliseconds: 280));
+        continue;
+      }
+
+      try {
+        if (mounted) setState(() {});
+        await _stt.listen(
+          onResult: _onSpeechResult,
+          listenFor: const Duration(minutes: 3),
+          pauseFor: const Duration(seconds: 3),
+          localeId: 'zh_CN',
+          listenOptions: SpeechListenOptions(
+            cancelOnError: true,
+            partialResults: true,
+          ),
+        );
+      } catch (e, st) {
+        debugPrint('[STT] listen error: $e\n$st');
+      }
+
+      if (!mounted) break;
+      if (mounted) setState(() {});
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    }
+  }
+
+  void _sendVoiceMessage(String text) {
+    if (text.isEmpty || _isThinking) return;
+
+    final authState = ref.read(authProvider);
+    final userId = authState.userId ?? '';
+
+    HapticFeedback.selectionClick();
+    setState(() {
+      _messages.add(MessageModel(
+        role: 'user',
+        content: text,
+        createdAt: DateTime.now(),
+      ));
+      _isThinking = true;
+      _streamingContent = '';
+    });
+    _messageController.clear();
+    _scrollToBottom();
+    _startThinkingTimeout();
+
+    _socket?.emit('sendMessage', {
+      'conversationId': _conversation?.id ?? widget.conversationId ?? '',
+      'content': text,
+      'userId': userId,
+    });
   }
 
   @override
   void dispose() {
+    _greetCtrl.removeListener(_onGreetListener);
+    _greetCtrl.dispose();
+    _idleCtrl.dispose();
+    _stt.stop();
     _socket?.disconnect();
     _socket?.dispose();
     _messageController.dispose();
+    _chatInputFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -61,10 +310,19 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   Future<void> _loadConversation() async {
     try {
       final repo = ref.read(chatRepositoryProvider);
-      final messages = await repo.getMessages(widget.conversationId);
+
+      // 若只有 agentId，先 findOrCreate 会话
+      String convId = widget.conversationId ?? '';
+      if (convId.isEmpty && widget.agentId != null) {
+        final created = await repo.createConversation(widget.agentId!);
+        convId = created.id;
+        if (mounted) ref.invalidate(conversationsProvider);
+      }
+
+      final messages = await repo.getMessages(convId);
       final convs = await ref.read(conversationsProvider.future);
       final conv = convs.firstWhere(
-        (c) => c.id == widget.conversationId,
+        (c) => c.id == convId,
         orElse: () => throw Exception('conversation not found'),
       );
 
@@ -72,17 +330,37 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         setState(() {
           _conversation = conv;
           _messages.addAll(messages.reversed);
-          _settledCount = _messages.length; // 历史消息不播入场动画
+          _settledCount = _messages.length;
         });
         _scrollToBottom();
         _connectSocket();
       }
     } catch (e) {
-      if (mounted) _connectSocket();
+      if (mounted) {
+        // 后端不可用时，设置占位会话，UI 进入演示模式而不是永久"连接中"
+        setState(() {
+          _conversation ??= ConversationModel(
+            id: widget.conversationId ?? widget.agentId ?? 'demo',
+            userId: '',
+            agentId: widget.agentId ?? widget.conversationId ?? '',
+            title: 'AI 伙伴',
+            lastMessageAt: DateTime.now(),
+            agent: const AgentBrief(
+              id: '',
+              name: 'AI 伙伴',
+              emoji: '🤖',
+              gradientStart: '#6C63FF',
+              gradientEnd: '#00D2FF',
+            ),
+          );
+        });
+        _connectSocket();
+      }
     }
   }
 
   void _connectSocket() {
+    _socket?.dispose();
     final authState = ref.read(authProvider);
     final token = authState.token ?? '';
     final userId = authState.userId ?? '';
@@ -103,6 +381,10 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
     _socket!.onDisconnect((_) {
       if (mounted) setState(() => _isConnected = false);
+    });
+
+    _socket!.onConnectError((data) {
+      debugPrint('[ChatSocket] connect_error: $data');
     });
 
     _socket!.on('thinkingChunk', (data) {
@@ -157,8 +439,15 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         setState(() => _isThinking = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(msg),
+            content: Text(
+              msg,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             backgroundColor: StarpathColors.error,
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -170,27 +459,24 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   void _sendMessage() {
     final text = _messageController.text.trim();
     if (text.isEmpty || _isThinking) return;
+    _sendVoiceMessage(text);
+  }
 
-    final authState = ref.read(authProvider);
-    final userId = authState.userId ?? '';
-
-    HapticFeedback.selectionClick();
-    setState(() {
-      _messages.add(MessageModel(
-        role: 'user',
-        content: text,
-        createdAt: DateTime.now(),
-      ));
-      _isThinking = true;
-      _streamingContent = '';
-    });
-    _messageController.clear();
-    _scrollToBottom();
-
-    _socket?.emit('sendMessage', {
-      'conversationId': widget.conversationId,
-      'content': text,
-      'userId': userId,
+  void _startThinkingTimeout() {
+    Future.delayed(_kThinkingTimeout, () {
+      if (mounted && _isThinking) {
+        setState(() {
+          _isThinking = false;
+          _streamingContent = '';
+          _thinkingContent = '';
+          // 若最后一条是空的 assistant 消息，移除它
+          if (_messages.isNotEmpty &&
+              !_messages.last.isUser &&
+              _messages.last.content.trim().isEmpty) {
+            _messages.removeLast();
+          }
+        });
+      }
     });
   }
 
@@ -215,41 +501,103 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     final gradEnd = agent != null
         ? _hexToColor(agent.gradientEnd)
         : StarpathColors.brandBlue;
-    final hasMessages = _messages.isNotEmpty || _isThinking;
+    // 有消息 && 不在语音模式 → 显示消息列表；其余情况显示沉浸视图
+    final hasMessages =
+        (_messages.isNotEmpty || _isThinking) && !_voiceBarWithMessages;
+    final showTextInputBar =
+        (_messages.isNotEmpty || _isThinking)
+            ? !_voiceBarWithMessages
+            : _showTextInput;
 
     return Scaffold(
-      backgroundColor: StarpathColors.surface,
+      backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
-      body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              gradStart.withValues(alpha: 0.22),
-              gradEnd.withValues(alpha: 0.10),
-              StarpathColors.surface,
-            ],
-            stops: const [0.0, 0.5, 1.0],
-          ),
-        ),
-        child: Column(
-          children: [
-            SizedBox(height: MediaQuery.paddingOf(context).top),
-            _buildTopBar(agent, gradStart, gradEnd),
-            Expanded(
-              child: hasMessages
-                  ? _buildChatBody(agent, gradStart, gradEnd)
-                  : _buildImmersiveView(agent, gradStart, gradEnd),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // ── 角色视频背景：打招呼（单次）→ 待机循环；点击热区触发打招呼 ──────
+          if (_greetReady && _idleReady)
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final ctrl = _isGreeting ? _greetCtrl : _idleCtrl;
+                  final videoSize = ctrl.value.size;
+                  if (videoSize == Size.zero) {
+                    return const ColoredBox(color: Colors.black);
+                  }
+                  final scaleW = box.maxWidth / videoSize.width;
+                  final scaleH = box.maxHeight / videoSize.height;
+                  final scale = scaleW > scaleH ? scaleW : scaleH;
+                  return ClipRect(
+                    child: OverflowBox(
+                      maxWidth: double.infinity,
+                      maxHeight: double.infinity,
+                      child: Transform.scale(
+                        scale: scale,
+                        child: SizedBox(
+                          width: videoSize.width,
+                          height: videoSize.height,
+                          child: VideoPlayer(ctrl),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            )
+          else
+            const ColoredBox(color: Colors.black),
+          // ── 聊天时：全屏黑色蒙层盖住视频（不用 BackdropFilter 避免导航过渡残影）
+          if (hasMessages)
+            const Positioned.fill(
+              child: IgnorePointer(
+                child: ColoredBox(color: Color(0xCC000000)),
+              ),
             ),
-            if (hasMessages)
-              _buildInputBar(gradStart, gradEnd)
-            else if (_showTextInput)
-              _buildInputBar(gradStart, gradEnd)
-            else
-              _buildVoiceControls(gradStart, gradEnd),
-          ],
-        ),
+          // ── 页面内容 ──────────────────────────────────────────────────
+          Column(
+            children: [
+              SizedBox(height: MediaQuery.paddingOf(context).top),
+              _buildTopBar(agent, gradStart, gradEnd),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // 全宽 × 500px 热区（不高于当前可用高度）
+                    final hotH = 500.0.clamp(0.0, constraints.maxHeight);
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // 热区在下层：全宽条带，列表/沉浸内容在上层
+                        if (_greetReady && _idleReady)
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            height: hotH,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _replayBgVideoFromHotZone,
+                              child: const ColoredBox(color: Colors.transparent),
+                            ),
+                          ),
+                        Positioned.fill(
+                          child: hasMessages
+                              ? _buildChatBody(
+                                  agent, gradStart, gradEnd)
+                              : _buildImmersiveView(),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              if (showTextInputBar)
+                _buildInputBar(gradStart, gradEnd)
+              else
+                _buildVoiceControls(gradStart, gradEnd),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -280,14 +628,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
           ),
           const SizedBox(width: 12),
           // 头像
-          AuraAvatar(
-            fallbackEmoji: agent?.emoji ?? '🤖',
-            size: 36,
-            gradientColors: [gradStart, gradEnd],
-            state: _isThinking
-                ? CompanionState.thinking
-                : CompanionState.active,
-          ),
+          _ipAvatarWidget(agentId: widget.agentId, size: 36),
           const SizedBox(width: 10),
           // 名称 + 状态
           Expanded(
@@ -303,21 +644,26 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                 ),
                 Row(
                   children: [
-                    _OnlineDot(isConnected: _isConnected),
+                    _OnlineDot(status: _connUi),
                     const SizedBox(width: 4),
                     Text(
                       _isThinking
                           ? '思考中...'
-                          : _isConnected
-                              ? '在线'
-                              : '连接中...',
+                          : switch (_connUi) {
+                              _ChatConnUi.live => '在线',
+                              _ChatConnUi.demo => '演示模式',
+                              _ChatConnUi.connecting => '连接中...',
+                            },
                       style: TextStyle(
                         fontSize: 11,
                         color: _isThinking
                             ? StarpathColors.warning
-                            : _isConnected
-                                ? StarpathColors.success
-                                : StarpathColors.textTertiary,
+                            : switch (_connUi) {
+                                _ChatConnUi.live => StarpathColors.success,
+                                _ChatConnUi.demo => StarpathColors.warning,
+                                _ChatConnUi.connecting =>
+                                  StarpathColors.textTertiary,
+                              },
                       ),
                     ),
                   ],
@@ -383,59 +729,9 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   // ── 沉浸式欢迎视图（无历史消息时） ──────────────────────────────────────
 
-  Widget _buildImmersiveView(
-      AgentBrief? agent, Color gradStart, Color gradEnd) {
-    final size = MediaQuery.sizeOf(context);
-    final emoji = agent?.emoji ?? '🤖';
-    final avatarSize = size.width * 0.58;
-
+  Widget _buildImmersiveView() {
     return Stack(
       children: [
-        // ── 头像光晕 ────────────────────────────────────────────────────
-        Positioned(
-          bottom: size.height * 0.04,
-          left: size.width * 0.2,
-          right: size.width * 0.2,
-          child: Container(
-            height: avatarSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: gradStart.withValues(alpha: 0.30),
-                  blurRadius: 90,
-                  spreadRadius: 30,
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        // ── 大头像居中偏下 ───────────────────────────────────────────────
-        Positioned(
-          bottom: size.height * 0.02,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: AuraAvatar(
-              fallbackEmoji: emoji,
-              size: avatarSize,
-              gradientColors: [gradStart, gradEnd],
-              state: _isConnected
-                  ? CompanionState.active
-                  : CompanionState.sleeping,
-            )
-                .animate()
-                .scale(
-                  begin: const Offset(0.75, 0.75),
-                  end: const Offset(1.0, 1.0),
-                  duration: 600.ms,
-                  curve: Curves.elasticOut,
-                )
-                .fadeIn(duration: 400.ms),
-          ),
-        ),
-
         // ── 问候文字（左上区域） ─────────────────────────────────────────
         Positioned(
           top: 16,
@@ -458,9 +754,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                   .slideY(begin: 0.15, curve: Curves.easeOut),
               const SizedBox(height: 10),
               Text(
-                _isConnected
-                    ? '我已经准备好陪你啦，\n有什么想聊的尽管说～'
-                    : '正在连接中，请稍候...',
+                switch (_connUi) {
+                  _ChatConnUi.live =>
+                    '我已经准备好陪你啦，\n有什么想聊的尽管说～',
+                  _ChatConnUi.demo =>
+                    '当前未连上实时服务（演示模式），\n界面可先体验；完整对话需启动后端。',
+                  _ChatConnUi.connecting => '正在连接中，请稍候...',
+                },
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: StarpathColors.onSurfaceVariant,
                       height: 1.6,
@@ -495,14 +795,21 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                   height: 6,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _isConnected
-                        ? StarpathColors.success
-                        : StarpathColors.textTertiary,
+                    color: switch (_connUi) {
+                      _ChatConnUi.live => StarpathColors.success,
+                      _ChatConnUi.demo => StarpathColors.warning,
+                      _ChatConnUi.connecting =>
+                        StarpathColors.textTertiary,
+                    },
                   ),
                 ),
                 const SizedBox(width: 5),
                 Text(
-                  _isConnected ? '智能对话中' : '连接中...',
+                  switch (_connUi) {
+                    _ChatConnUi.live => '智能对话中',
+                    _ChatConnUi.demo => '演示模式',
+                    _ChatConnUi.connecting => '连接中...',
+                  },
                   style: const TextStyle(
                     fontSize: 11,
                     color: StarpathColors.onSurfaceVariant,
@@ -523,27 +830,75 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   Widget _buildVoiceControls(Color gradStart, Color gradEnd) {
     final bottom = MediaQuery.paddingOf(context).bottom;
+    final listening = _stt.isListening;
+    final hint = !_sttAvailable
+        ? '当前设备不支持语音识别...'
+        : (listening ? '正在聆听...' : '准备就绪，请直接说话...');
+
     return Container(
-      padding: EdgeInsets.only(bottom: bottom + 24, top: 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: EdgeInsets.only(bottom: bottom + 24, top: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // 关闭/返回
-          _VoiceButton(
-            icon: Icons.close_rounded,
-            onTap: () => Navigator.of(context).pop(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 8),
+            child: Text(
+              _voiceTranscript.isEmpty ? hint : _voiceTranscript,
+              style: TextStyle(
+                color: _voiceTranscript.isEmpty
+                    ? (listening
+                        ? gradStart.withValues(alpha: 0.88)
+                        : StarpathColors.textTertiary)
+                    : StarpathColors.onSurface,
+                fontSize: 15,
+                height: 1.45,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
-          const SizedBox(width: 24),
-          // 静音（装饰）
-          const _VoiceButton(icon: Icons.mic_off_rounded),
-          const SizedBox(width: 24),
-          // 打开文字输入
-          _VoiceButton(
-            icon: Icons.keyboard_rounded,
-            highlight: true,
-            gradStart: gradStart,
-            gradEnd: gradEnd,
-            onTap: () => setState(() => _showTextInput = true),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _VoiceButton(
+                icon: Icons.close_rounded,
+                onTap: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(width: 20),
+              // 语音模式中心按钮：可点击，确认停留在语音状态（触觉反馈）
+              _VoiceButton(
+                icon: Icons.mic_rounded,
+                highlight: true,
+                onTap: () {
+                  HapticFeedback.mediumImpact();
+                  // 若因某种原因意外处于聊天模式，点此强制回到语音模式
+                  if (!_voiceBarWithMessages) {
+                    FocusScope.of(context).unfocus();
+                    setState(() => _voiceBarWithMessages = true);
+                  }
+                },
+              ),
+              const SizedBox(width: 20),
+              _VoiceButton(
+                icon: Icons.keyboard_rounded,
+                onTap: () {
+                  final msgs = _messages.isNotEmpty || _isThinking;
+                  setState(() {
+                    if (msgs) {
+                      _voiceBarWithMessages = false;
+                    } else {
+                      _showTextInput = true;
+                    }
+                  });
+                  _stt.stop();
+                  if (msgs) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _chatInputFocusNode.requestFocus();
+                    });
+                  }
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -560,6 +915,11 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   }) {
     final isUser = msg.isUser;
 
+    // 不渲染空内容 AI 消息（streaming 启动前的空白帧）
+    if (!isUser && msg.content.isEmpty && !isStreaming) {
+      return const SizedBox.shrink();
+    }
+
     return _BubbleWithTimestamp(
       isUser: isUser,
       timestamp: msg.createdAt,
@@ -568,14 +928,10 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         child: Row(
           mainAxisAlignment:
               isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,  // 头像始终对齐顶部
           children: [
             if (!isUser) ...[
-              AuraAvatar(
-                fallbackEmoji: emoji,
-                size: 32,
-                gradientColors: gradColors,
-              ),
+              _ipAvatarWidget(agentId: widget.agentId, size: 32),
               const SizedBox(width: 8),
             ],
             Flexible(
@@ -583,9 +939,10 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
-                  gradient: isUser ? StarpathColors.brandGradient : null,
-                  color:
-                      isUser ? null : Colors.white.withValues(alpha: 0.9),
+                  gradient: isUser ? _kInputFieldBluePurple : null,
+                  color: isUser
+                      ? null
+                      : Colors.white.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.only(
                     topLeft: const Radius.circular(20),
                     topRight: const Radius.circular(20),
@@ -594,34 +951,29 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                   ),
                   border: isUser
                       ? null
-                      : Border(
-                          left: BorderSide(
-                            width: 2,
-                            color: gradColors[0].withValues(alpha: 0.5),
-                          ),
+                      : Border.all(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          width: 0.8,
                         ),
                   boxShadow: [
                     BoxShadow(
-                      color: (isUser ? gradColors[0] : Colors.black)
-                          .withValues(alpha: 0.08),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+                      color: isUser
+                          ? const Color(0xFF6B9DFF).withValues(alpha: 0.35)
+                          : Colors.black.withValues(alpha: 0.20),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
                     ),
                   ],
                 ),
                 child: isStreaming
                     ? _StreamingText(
                         content: msg.content,
-                        textColor: isUser
-                            ? Colors.white
-                            : StarpathColors.textPrimary,
+                        textColor: Colors.white,
                       )
                     : Text(
                         msg.content,
-                        style: TextStyle(
-                          color: isUser
-                              ? Colors.white
-                              : StarpathColors.textPrimary,
+                        style: const TextStyle(
+                          color: Colors.white,
                           fontSize: 15,
                           height: 1.6,
                         ),
@@ -645,12 +997,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AuraAvatar(
-            fallbackEmoji: emoji,
-            size: 32,
-            gradientColors: gradColors,
-            state: CompanionState.thinking,
-          ),
+          _ipAvatarWidget(agentId: widget.agentId, size: 32),
           const SizedBox(width: 8),
           Flexible(
             child: Column(
@@ -665,8 +1012,12 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.9),
+                      color: StarpathColors.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: StarpathColors.outlineVariant,
+                        width: 0.8,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -699,17 +1050,18 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                     margin: const EdgeInsets.only(top: 4),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: gradColors[0].withValues(alpha: 0.05),
+                      color: StarpathColors.surfaceContainer,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: gradColors[0].withValues(alpha: 0.15),
+                        color: StarpathColors.outlineVariant,
+                        width: 0.8,
                       ),
                     ),
                     child: Text(
                       _thinkingContent,
                       style: const TextStyle(
                         fontSize: 12,
-                        color: StarpathColors.textSecondary,
+                        color: StarpathColors.onSurfaceVariant,
                         height: 1.5,
                         fontStyle: FontStyle.italic,
                       ),
@@ -725,9 +1077,82 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   // ── 输入栏：发送按钮弹压+check反馈 + 聚焦边框 ────────────────────────────
 
+  Widget _buildQuickSuggestChips() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final (emoji, text) in _kChatQuickSuggests)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      _messageController.text = text;
+                      _messageController.selection = TextSelection.fromPosition(
+                        TextPosition(offset: text.length),
+                      );
+                      setState(() {});
+                      _chatInputFocusNode.requestFocus();
+                    },
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 260),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: StarpathColors.surfaceContainer
+                            .withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: StarpathColors.outlineVariant,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            emoji,
+                            style: const TextStyle(fontSize: 16, height: 1.2),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              text,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                height: 1.35,
+                                color: StarpathColors.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputBar(Color gradStart, Color gradEnd) {
     final canSend =
         !_isThinking && _messageController.text.trim().isNotEmpty;
+    final showQuickSuggests = _showTextInput || _messages.isNotEmpty;
+    final hasMsgs = _messages.isNotEmpty || _isThinking;
 
     return ClipRRect(
       child: BackdropFilter(
@@ -740,49 +1165,83 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
             bottom: MediaQuery.of(context).padding.bottom + 12,
           ),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.07),
+            color: StarpathColors.surfaceBright.withValues(alpha: 0.38),
             border: const Border(
               top: BorderSide(
-                  color: StarpathColors.divider, width: 0.5),
+                color: StarpathColors.divider,
+                width: 0.8,
+              ),
             ),
           ),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 沉浸模式下显示「收起键盘」返回三按钮
-              if (_showTextInput && _messages.isEmpty) ...[
-                GestureDetector(
-                  onTap: () {
-                    FocusScope.of(context).unfocus();
-                    setState(() => _showTextInput = false);
-                  },
-                  child: Container(
-                    width: 38,
-                    height: 38,
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: StarpathColors.surfaceContainerHigh
-                          .withValues(alpha: 0.8),
-                      border: Border.all(
-                          color: StarpathColors.outlineVariant, width: 0.8),
+              if (showQuickSuggests)
+                _buildQuickSuggestChips()
+                    .animate()
+                    .fadeIn(duration: 220.ms, curve: Curves.easeOut)
+                    .slideY(
+                      begin: 0.06,
+                      duration: 240.ms,
+                      curve: Curves.easeOutCubic,
                     ),
-                    child: const Icon(Icons.keyboard_hide_rounded,
-                        size: 18, color: StarpathColors.onSurfaceVariant),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // 沉浸模式下显示「收起键盘」返回三按钮
+                  if (_showTextInput && _messages.isEmpty) ...[
+                    GestureDetector(
+                      onTap: () {
+                        FocusScope.of(context).unfocus();
+                        setState(() => _showTextInput = false);
+                      },
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: StarpathColors.surfaceContainerHigh
+                              .withValues(alpha: 0.8),
+                          border: Border.all(
+                              color: StarpathColors.outlineVariant, width: 0.8),
+                        ),
+                        child: const Icon(Icons.keyboard_hide_rounded,
+                            size: 18, color: StarpathColors.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                  // ── 麦克风：有消息时点击一次切回底部语音界面 ───────────────────
+                  GestureDetector(
+                    onTap: hasMsgs
+                        ? () {
+                            FocusScope.of(context).unfocus();
+                            setState(() => _voiceBarWithMessages = true);
+                          }
+                        : null,
+                    behavior: HitTestBehavior.opaque,
+                    child: _MicButton(
+                      available: _sttAvailable,
+                      listening: _stt.isListening,
+                    ),
                   ),
-                ),
-              ],
-              Expanded(
-                child: _FocusInputField(
-                  controller: _messageController,
-                  onSubmitted: (_) => _sendMessage(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _SendButton(
-                canSend: canSend,
-                gradStart: gradStart,
-                gradEnd: gradEnd,
-                onSend: _sendMessage,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _FocusInputField(
+                      controller: _messageController,
+                      focusNode: _chatInputFocusNode,
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _SendButton(
+                    canSend: canSend,
+                    gradStart: gradStart,
+                    gradEnd: gradEnd,
+                    onSend: _sendMessage,
+                  ),
+                ],
               ),
             ],
           ),
@@ -795,8 +1254,8 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 // ── 在线状态涟漪点 ────────────────────────────────────────────────────────────
 
 class _OnlineDot extends StatefulWidget {
-  final bool isConnected;
-  const _OnlineDot({required this.isConnected});
+  final _ChatConnUi status;
+  const _OnlineDot({required this.status});
 
   @override
   State<_OnlineDot> createState() => _OnlineDotState();
@@ -807,6 +1266,8 @@ class _OnlineDotState extends State<_OnlineDot>
   late final AnimationController _ctrl;
   late final Animation<double> _ripple;
 
+  bool get _live => widget.status == _ChatConnUi.live;
+
   @override
   void initState() {
     super.initState();
@@ -815,15 +1276,15 @@ class _OnlineDotState extends State<_OnlineDot>
       duration: const Duration(milliseconds: 2000),
     );
     _ripple = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    if (widget.isConnected) _ctrl.repeat();
+    if (_live) _ctrl.repeat();
   }
 
   @override
   void didUpdateWidget(_OnlineDot old) {
     super.didUpdateWidget(old);
-    if (widget.isConnected && !_ctrl.isAnimating) {
+    if (_live && !_ctrl.isAnimating) {
       _ctrl.repeat();
-    } else if (!widget.isConnected && _ctrl.isAnimating) {
+    } else if (!_live && _ctrl.isAnimating) {
       _ctrl.stop();
     }
   }
@@ -836,9 +1297,11 @@ class _OnlineDotState extends State<_OnlineDot>
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.isConnected
-        ? StarpathColors.success
-        : StarpathColors.textTertiary;
+    final color = switch (widget.status) {
+      _ChatConnUi.live => StarpathColors.success,
+      _ChatConnUi.demo => StarpathColors.warning,
+      _ChatConnUi.connecting => StarpathColors.textTertiary,
+    };
 
     return SizedBox(
       width: 14,
@@ -846,7 +1309,7 @@ class _OnlineDotState extends State<_OnlineDot>
       child: Stack(
         alignment: Alignment.center,
         children: [
-          if (widget.isConnected)
+          if (_live)
             AnimatedBuilder(
               animation: _ripple,
               builder: (_, __) {
@@ -968,6 +1431,7 @@ class _BubbleWithTimestampState extends State<_BubbleWithTimestamp> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           widget.child,
           if (ts != null)
@@ -1076,34 +1540,50 @@ class _StreamingTextState extends State<_StreamingText>
   }
 }
 
-// ── 聚焦边框输入框 ────────────────────────────────────────────────────────────
+// ── 聚焦边框输入框（蓝紫渐变底）────────────────────────────────────────────────
+
+const _kInputFieldBluePurple = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [
+    Color(0xFF6B9DFF),
+    Color(0xFF6366F1),
+    Color(0xFF9B72FF),
+  ],
+  stops: [0.0, 0.48, 1.0],
+);
 
 class _FocusInputField extends StatefulWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final ValueChanged<String> onSubmitted;
 
-  const _FocusInputField(
-      {required this.controller, required this.onSubmitted});
+  const _FocusInputField({
+    required this.controller,
+    required this.focusNode,
+    required this.onSubmitted,
+  });
 
   @override
   State<_FocusInputField> createState() => _FocusInputFieldState();
 }
 
 class _FocusInputFieldState extends State<_FocusInputField> {
-  final _focusNode = FocusNode();
   bool _focused = false;
 
   @override
   void initState() {
     super.initState();
-    _focusNode.addListener(() {
-      setState(() => _focused = _focusNode.hasFocus);
-    });
+    widget.focusNode.addListener(_onFocusNodeChange);
+  }
+
+  void _onFocusNodeChange() {
+    if (mounted) setState(() => _focused = widget.focusNode.hasFocus);
   }
 
   @override
   void dispose() {
-    _focusNode.dispose();
+    widget.focusNode.removeListener(_onFocusNodeChange);
     super.dispose();
   }
 
@@ -1113,23 +1593,40 @@ class _FocusInputFieldState extends State<_FocusInputField> {
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        boxShadow: _focused
-            ? [
-                BoxShadow(
-                  color: StarpathColors.accentViolet.withValues(alpha: 0.28),
-                  blurRadius: 10,
-                  spreadRadius: 1,
-                ),
-              ]
-            : [],
+        color: StarpathColors.surfaceContainerHigh,
+        border: Border.all(
+          color: _focused
+              ? StarpathColors.primary.withValues(alpha: 0.45)
+              : StarpathColors.outlineVariant.withValues(alpha: 0.5),
+          width: 1.1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.20),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: TextField(
         controller: widget.controller,
-        focusNode: _focusNode,
+        focusNode: widget.focusNode,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 15,
+          height: 1.45,
+          fontWeight: FontWeight.w500,
+        ),
+        cursorColor: Colors.white,
         decoration: InputDecoration(
           hintText: '输入消息...',
+          hintStyle: TextStyle(
+            color: Colors.white.withValues(alpha: 0.62),
+            fontSize: 15,
+            fontWeight: FontWeight.w400,
+          ),
           filled: true,
-          fillColor: StarpathColors.surfaceContainerHigh,
+          fillColor: Colors.transparent,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(24),
             borderSide: BorderSide.none,
@@ -1140,10 +1637,7 @@ class _FocusInputFieldState extends State<_FocusInputField> {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(24),
-            borderSide: BorderSide(
-              color: StarpathColors.accentViolet.withValues(alpha: 0.55),
-              width: 1.5,
-            ),
+            borderSide: BorderSide.none,
           ),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -1223,8 +1717,15 @@ class _SendButtonState extends State<_SendButton> {
                   : null,
               color: widget.canSend
                   ? null
-                  : StarpathColors.textTertiary.withValues(alpha: 0.3),
+                  : StarpathColors.surfaceContainerHighest
+                      .withValues(alpha: 0.85),
               shape: BoxShape.circle,
+              border: !widget.canSend
+                  ? Border.all(
+                      color: StarpathColors.outlineVariant,
+                      width: 0.8,
+                    )
+                  : null,
               boxShadow: widget.canSend && _hovered
                   ? [
                       BoxShadow(
@@ -1244,10 +1745,87 @@ class _SendButtonState extends State<_SendButton> {
                 key: ValueKey(_showCheck),
                 color: widget.canSend
                     ? Colors.white
-                    : StarpathColors.textTertiary,
+                    : StarpathColors.onSurfaceVariant.withValues(alpha: 0.5),
                 size: 18,
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── 输入栏语音 / 语言入口：蓝紫渐变（底圈 + 图标 glyph）────────────────────────
+
+class _MicButton extends StatefulWidget {
+  final bool available;
+  final bool listening;
+
+  const _MicButton({
+    required this.available,
+    this.listening = false,
+  });
+
+  /// 聊天栏语音入口统一蓝紫渐变（与主题 accent 协调）
+  static const LinearGradient _bluePurpleGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFF6B9DFF),
+      Color(0xFF6366F1),
+      Color(0xFF9B72FF),
+    ],
+    stops: [0.0, 0.48, 1.0],
+  );
+
+  @override
+  State<_MicButton> createState() => _MicButtonState();
+}
+
+class _MicButtonState extends State<_MicButton> {
+  @override
+  Widget build(BuildContext context) {
+    const g = _MicButton._bluePurpleGradient;
+    final shadowColor = const Color(0xFF6366F1).withValues(alpha: 0.38);
+    final active = widget.available && widget.listening;
+
+    return AnimatedScale(
+      scale: active ? 1.06 : 1.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInOut,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: widget.available ? g : null,
+          color: widget.available
+              ? null
+              : StarpathColors.surfaceContainerHigh.withValues(alpha: 0.8),
+          border: Border.all(
+            color: widget.available
+                ? Colors.white.withValues(alpha: active ? 0.35 : 0.22)
+                : StarpathColors.outlineVariant,
+            width: 0.8,
+          ),
+          boxShadow: widget.available
+              ? [
+                  BoxShadow(
+                    color: shadowColor.withValues(alpha: active ? 0.55 : 0.38),
+                    blurRadius: active ? 16 : 12,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : null,
+        ),
+        child: Center(
+          child: Icon(
+            Icons.mic_rounded,
+            size: 19,
+            color: widget.available
+                ? Colors.white
+                : StarpathColors.onSurfaceVariant.withValues(alpha: 0.5),
           ),
         ),
       ),
@@ -1261,15 +1839,23 @@ class _VoiceButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback? onTap;
   final bool highlight;
-  final Color? gradStart;
-  final Color? gradEnd;
+
+  /// 与输入栏语音按钮一致的蓝紫渐变（中间麦克风状态）
+  static const LinearGradient kHighlightBluePurple = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFF6B9DFF),
+      Color(0xFF6366F1),
+      Color(0xFF9B72FF),
+    ],
+    stops: [0.0, 0.48, 1.0],
+  );
 
   const _VoiceButton({
     required this.icon,
     this.onTap,
     this.highlight = false,
-    this.gradStart,
-    this.gradEnd,
   });
 
   @override
@@ -1297,27 +1883,22 @@ class _VoiceButtonState extends State<_VoiceButton> {
           height: 62,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: widget.highlight && widget.gradStart != null
-                ? LinearGradient(
-                    colors: [widget.gradStart!, widget.gradEnd!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  )
-                : null,
+            gradient:
+                widget.highlight ? _VoiceButton.kHighlightBluePurple : null,
             color: widget.highlight
                 ? null
                 : StarpathColors.surfaceContainerHigh.withValues(alpha: 0.85),
             border: Border.all(
               color: widget.highlight
-                  ? Colors.transparent
+                  ? Colors.white.withValues(alpha: 0.22)
                   : StarpathColors.outlineVariant,
               width: 0.8,
             ),
-            boxShadow: widget.highlight && widget.gradStart != null
+            boxShadow: widget.highlight
                 ? [
                     BoxShadow(
-                      color: widget.gradStart!.withValues(alpha: 0.40),
-                      blurRadius: 18,
+                      color: const Color(0xFF6366F1).withValues(alpha: 0.42),
+                      blurRadius: 20,
                       spreadRadius: -2,
                       offset: const Offset(0, 5),
                     ),

@@ -4,7 +4,8 @@ import 'package:starpath/features/agent_studio/domain/agent_model.dart';
 
 final agentRepositoryProvider = Provider((ref) => AgentRepository());
 
-final myAgentsProvider = FutureProvider.autoDispose<List<AgentModel>>((ref) {
+// 不使用 autoDispose，避免切换 Tab 时重复请求导致卡顿
+final myAgentsProvider = FutureProvider<List<AgentModel>>((ref) {
   return ref.read(agentRepositoryProvider).getMyAgents();
 });
 

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:starpath/core/router.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
@@ -20,9 +21,13 @@ void main() {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
+    statusBarBrightness: Brightness.dark,
     systemNavigationBarColor: Colors.transparent,
     systemNavigationBarIconBrightness: Brightness.light,
+    systemStatusBarContrastEnforced: false,
   ));
+  // 内容可绘入状态栏区域，避免与下方出现「硬分割」
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   runApp(const ProviderScope(child: StarpathApp()));
 }
@@ -35,6 +40,9 @@ class StarpathApp extends ConsumerStatefulWidget {
 }
 
 class _StarpathAppState extends ConsumerState<StarpathApp> {
+  GoRouter? _router;
+  AuthState? _routerAuthState;
+
   @override
   void initState() {
     super.initState();
@@ -43,7 +51,14 @@ class _StarpathAppState extends ConsumerState<StarpathApp> {
 
   @override
   Widget build(BuildContext context) {
-    final router = createRouter(ref);
+    // 监听 auth 状态：登录/登出时需要重建 router（使 redirect 规则生效）。
+    // 普通页面切换不触发此处，router 实例被复用，不会重置导航状态。
+    final authState = ref.watch(authProvider);
+    if (_router == null || _routerAuthState != authState) {
+      _routerAuthState = authState;
+      _router = createRouter(ref);
+    }
+    final router = _router!;
 
     final app = MaterialApp.router(
       title: 'Starpath',
@@ -101,11 +116,24 @@ class _WebPhoneFrame extends StatelessWidget {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  // ── 用 Stack 让 app 内容铺满整个手机框（含状态栏区域），
+                  // 状态栏图标透明叠在上方，不再产生颜色断层。
+                  child: Stack(
                     children: [
-                      const _WebSimulatedStatusBar(),
-                      Expanded(child: child),
+                      // app 填满全框，同时注入 padding.top=44 让各页面正确避开状态栏
+                      MediaQuery(
+                        data: MediaQuery.of(context).copyWith(
+                          padding: const EdgeInsets.only(top: 44),
+                        ),
+                        child: child,
+                      ),
+                      // 模拟状态栏：透明背景，图标叠在页面内容之上
+                      const Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _WebSimulatedStatusBar(),
+                      ),
                     ],
                   ),
                 ),
@@ -119,38 +147,36 @@ class _WebPhoneFrame extends StatelessWidget {
 }
 
 /// Web 预览：顶部模拟手机状态栏（时间、信号、电量）
+/// 透明背景，叠在 app 内容之上，不遮挡底层渐变。
 class _WebSimulatedStatusBar extends StatelessWidget {
   const _WebSimulatedStatusBar();
 
   @override
   Widget build(BuildContext context) {
-    const iconColor = StarpathColors.onSurfaceVariant;
-    return ColoredBox(
-      color: StarpathColors.surface,
-      child: SizedBox(
-        height: 44,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              const Text(
-                '9:41',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: StarpathColors.onSurface,
-                  letterSpacing: -0.2,
-                ),
+    return SizedBox(
+      height: 44,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Row(
+          children: [
+            const Text(
+              '9:41',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+                letterSpacing: -0.2,
               ),
-              const Spacer(),
-              const Icon(Icons.signal_cellular_alt_rounded,
-                  size: 16, color: iconColor),
-              const SizedBox(width: 5),
-              const Icon(Icons.wifi_rounded, size: 16, color: iconColor),
-              const SizedBox(width: 5),
-              const Icon(Icons.battery_full_rounded, size: 20, color: iconColor),
-            ],
-          ),
+            ),
+            const Spacer(),
+            const Icon(Icons.signal_cellular_alt_rounded,
+                size: 16, color: Colors.white),
+            const SizedBox(width: 5),
+            const Icon(Icons.wifi_rounded, size: 16, color: Colors.white),
+            const SizedBox(width: 5),
+            const Icon(Icons.battery_full_rounded,
+                size: 20, color: Colors.white),
+          ],
         ),
       ),
     );

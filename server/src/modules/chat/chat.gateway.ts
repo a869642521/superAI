@@ -31,28 +31,53 @@ export class ChatGateway {
   ) {
     const { conversationId, content, userId } = data;
 
+    // 若会话不存在（前端用 agentId 当 conversationId），先 findOrCreate 会话
+    let realConversationId = conversationId;
+    try {
+      await this.chatService.getConversationWithAgent(conversationId);
+    } catch {
+      // 会话不存在：把 conversationId 当 agentId 来 findOrCreate
+      const effectiveUserId = userId || 'anonymous';
+      try {
+        const conv = await this.chatService.createConversation(
+          effectiveUserId,
+          conversationId,
+        );
+        realConversationId = conv.id;
+        client.emit('conversationCreated', {
+          oldId: conversationId,
+          newId: realConversationId,
+        });
+      } catch {
+        client.emit('error', { message: '会话创建失败，请重试' });
+        return;
+      }
+    }
+
     await this.chatService.saveMessage(
-      conversationId,
+      realConversationId,
       MessageRole.user,
       content,
     );
 
     // Check and deduct currency for messages beyond free tier
-    try {
-      await this.currencyService.handleMessageCost(userId);
-    } catch {
-      client.emit('error', { message: '灵感币不足，请先发布内容赚取灵感币' });
-      return;
+    if (userId) {
+      try {
+        await this.currencyService.handleMessageCost(userId);
+      } catch {
+        client.emit('error', { message: '灵感币不足，请先发布内容赚取灵感币' });
+        return;
+      }
     }
 
     const conversation =
-      await this.chatService.getConversationWithAgent(conversationId);
+      await this.chatService.getConversationWithAgent(realConversationId);
     const recentMessages =
-      await this.chatService.getRecentMessagesForContext(conversationId);
+      await this.chatService.getRecentMessagesForContext(realConversationId);
 
     // Call AI service via HTTP
     try {
-      const aiServiceUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+      const aiServiceUrl = process.env.AI_SERVICE_URL || 'http://localhost:8001';
       const response = await fetch(`${aiServiceUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -95,12 +120,12 @@ export class ChatGateway {
             const delta = parsed.choices?.[0]?.delta ?? {};
             // Thinking phase
             if (delta.thinking) {
-              client.emit('thinkingChunk', { conversationId, token: delta.thinking });
+              client.emit('thinkingChunk', { conversationId: realConversationId, token: delta.thinking });
             }
             // Actual response
             if (delta.content) {
               fullContent += delta.content;
-              client.emit('messageChunk', { conversationId, token: delta.content });
+              client.emit('messageChunk', { conversationId: realConversationId, token: delta.content });
             }
           } catch {
             // skip malformed chunks
@@ -110,13 +135,13 @@ export class ChatGateway {
 
       if (fullContent) {
         await this.chatService.saveMessage(
-          conversationId,
+          realConversationId,
           MessageRole.assistant,
           fullContent,
         );
       }
 
-      client.emit('messageComplete', { conversationId });
+      client.emit('messageComplete', { conversationId: realConversationId });
     } catch (error) {
       client.emit('error', {
         message: 'AI 服务暂时不可用，请稍后再试',
