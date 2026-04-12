@@ -198,11 +198,15 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   /// 已通过 SDK 收到的 AI 回复文本（流式拼接）
   String _sdkAiBuffer = '';
 
-  /// 是否使用火山引擎 SDK（设置 appId/token 后改为 true）
-  static const bool _useVolcSdk = false;
-  // 替换为你的真实 AppId 和 Access Token
-  static const String _volcAppId    = 'YOUR_VOLC_APP_ID';
-  static const String _volcAppToken = 'YOUR_VOLC_APP_TOKEN';
+  /// 是否走火山实时语音 SDK：构建/运行时传入
+  /// `flutter run --dart-define=VOLC_VOICE_SDK=true --dart-define=VOLC_APP_ID=... --dart-define=VOLC_APP_TOKEN=...`
+  /// 勿把密钥写入仓库；密钥泄露请到控制台轮换。
+  static const bool _useVolcSdk =
+      bool.fromEnvironment('VOLC_VOICE_SDK', defaultValue: false);
+  static const String _volcAppId =
+      String.fromEnvironment('VOLC_APP_ID', defaultValue: '');
+  static const String _volcAppToken =
+      String.fromEnvironment('VOLC_APP_TOKEN', defaultValue: '');
 
   /// 无历史消息且未切键盘：展示底部语音沉浸栏；有历史消息：始终可语音。
   /// WebSocket 未连上但 REST 已拿到会话时，不再显示「连接中」。
@@ -424,6 +428,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   // ── 火山引擎 SDK 实时对话 ────────────────────────────────────────────────────
 
   Future<void> _initVolcVoice() async {
+    if (_volcAppId.isEmpty || _volcAppToken.isEmpty) {
+      debugPrint(
+          '[VolcVoice] 未配置 VOLC_APP_ID / VOLC_APP_TOKEN，回退 STT+TTS');
+      await _initStt();
+      await _initTts();
+      return;
+    }
     await _voiceBridge.prepareEnvironment();
     _voiceBridgeSub = _voiceBridge.events.listen(_onVolcEvent);
     final ok = await _voiceBridge.startDialog(const VoiceDialogConfig(

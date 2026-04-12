@@ -2,6 +2,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // 火山引擎 SpeechEngine SDK Maven 仓库
+        maven { url = uri("https://artifact.bytedance.com/repository/Volcengine/") }
     }
 }
 

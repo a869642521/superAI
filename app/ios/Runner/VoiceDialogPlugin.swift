@@ -1,36 +1,29 @@
 import Flutter
 import Foundation
+import AVFoundation
+
+// 火山引擎 iOS SDK（pod install 后自动可用）
+import SpeechEngineToB
 
 /**
  * Flutter ↔ 火山引擎 SpeechEngine Dialog SDK 桥接（iOS）
  *
- * ⚠️ 接入前请完成：
- *   1. Podfile 添加: pod 'SpeechEngineToB', '0.0.14.3-bugfix'
- *      执行 pod install
- *   2. 在火山引擎控制台获取 AppId / Access Token
- *   3. 在项目 Runner target → Build Phases → Copy Bundle Resources 添加
- *      AEC 模型文件（SDK 包内提供）
- *   4. 取消本文件中所有 // SDK: 注释行的注释
+ * API 基于 SpeechEngineToB 0.0.14.5 头文件实现，主要接口：
+ *   - SpeechEngine.prepareEnvironment()
+ *   - SpeechEngine().createEngineWithDelegate(self)
+ *   - engine.setStringParam / setBoolParam / setIntParam
+ *   - engine.initEngine()  （注意：不是 startEngine）
+ *   - engine.sendDirective(SEDirective)
+ *   - delegate: onMessageWithType(_:andData:)
  */
-
-// SDK: import SpeechEngineToB
-
 class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
-    // ── 常量 ──────────────────────────────────────────────────────────────────
     static let methodChannelName = "com.starpath/voice_dialog"
     static let eventChannelName  = "com.starpath/voice_dialog_events"
 
-    private static let keyEngineName = "EngineName"
-    private static let keyAppId      = "AppId"
-    private static let keyAppToken   = "AccessToken"
-    private static let keyResourceId = "ResourceId"
-    private static let dialogEngine  = "dialog"
-
-    // ── 实例变量 ──────────────────────────────────────────────────────────────
     private var eventSink: FlutterEventSink?
-
-    // SDK: private var engine: SpeechEngine?
+    private var engine: SpeechEngine?
+    private var sessionStarted = false
 
     // ── 注册 ──────────────────────────────────────────────────────────────────
     static func register(with registrar: FlutterPluginRegistrar) {
@@ -49,7 +42,7 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         eventChannel.setStreamHandler(instance)
     }
 
-    // ── MethodChannel 调用处理 ─────────────────────────────────────────────────
+    // ── MethodChannel ─────────────────────────────────────────────────────────
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "prepareEnvironment":
@@ -69,14 +62,14 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
     }
 
-    // ── SDK 方法实现 ───────────────────────────────────────────────────────────
+    // ── SDK 实现 ──────────────────────────────────────────────────────────────
 
     private func prepareEnvironment(result: FlutterResult) {
-        // SDK: SpeechEngine.prepareEnvironment()
+        SpeechEngine.prepareEnvironment()
         result(nil)
     }
 
-    private func startDialog(args: [String: Any], result: FlutterResult) {
+    private func startDialog(args: [String: Any], result: @escaping FlutterResult) {
         guard let appId    = args["appId"]    as? String,
               let appToken = args["appToken"] as? String else {
             result(FlutterError(code: "MISSING_PARAM", message: "appId/appToken required", details: nil))
@@ -84,79 +77,76 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
         let resourceId = args["resourceId"] as? String ?? "volc.speech.dialog"
 
-        // ── TODO: 取消以下注释以启用真实 SDK ──────────────────────────────
-        //
-        // engine = SpeechEngine()
-        // engine?.createEngine(withDelegate: self)
-        // engine?.setStringParam(appId,    key: VoiceDialogPlugin.keyAppId)
-        // engine?.setStringParam(appToken, key: VoiceDialogPlugin.keyAppToken)
-        // engine?.setStringParam(resourceId, key: VoiceDialogPlugin.keyResourceId)
-        // engine?.setStringParam(VoiceDialogPlugin.dialogEngine, key: VoiceDialogPlugin.keyEngineName)
-        // // AEC 模型路径（Bundle 内的模型文件）
-        // if let modelPath = Bundle.main.path(forResource: "aec_model", ofType: nil) {
-        //     engine?.setStringParam(modelPath, key: "AECModelPath")
-        // }
-        // let code = engine?.startEngine() ?? -1
-        // guard code == 0 else {
-        //     result(FlutterError(code: "START_ERROR", message: "startEngine failed: \(code)", details: nil))
-        //     return
-        // }
-        //
-        // ── 无 SDK 时的 Mock（替换为上面的代码后删除）───────────────────────
-        pushEvent(["type": "connected"])
-        // ──────────────────────────────────────────────────────────────────
+        // 请求麦克风权限
+        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
+            guard let self = self else { return }
+            guard granted else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "MIC_DENIED", message: "Microphone permission denied", details: nil))
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                self.initEngine(appId: appId, appToken: appToken, resourceId: resourceId, result: result)
+            }
+        }
+    }
 
+    private func initEngine(appId: String, appToken: String, resourceId: String, result: @escaping FlutterResult) {
+        engine = SpeechEngine()
+        guard engine?.createEngine(with: self) == true else {
+            engine = nil
+            result(FlutterError(code: "CREATE_ERROR", message: "createEngineWithDelegate failed", details: nil))
+            return
+        }
+
+        // 必填参数
+        engine?.setStringParam(SE_DIALOG_ENGINE,  forKey: SE_PARAMS_KEY_ENGINE_NAME_STRING)
+        engine?.setStringParam(appId,             forKey: SE_PARAMS_KEY_APP_ID_STRING)
+        engine?.setStringParam(appToken,          forKey: SE_PARAMS_KEY_APP_TOKEN_STRING)
+        engine?.setStringParam(resourceId,        forKey: SE_PARAMS_KEY_RESOURCE_ID_STRING)
+
+        // AEC 回声消除（将 SDK 中的 aec_model 文件添加到 Xcode Copy Bundle Resources）
+        if let modelPath = Bundle.main.path(forResource: "aec_model", ofType: nil) {
+            engine?.setBoolParam(true, forKey: SE_PARAMS_KEY_ENABLE_AEC_BOOL)
+            engine?.setStringParam(modelPath, forKey: SE_PARAMS_KEY_AEC_MODEL_PATH_STRING)
+        }
+
+        // initEngine 返回 0 表示成功
+        let code = engine?.initEngine() ?? SENoError
+        guard code == SENoError else {
+            engine?.destroy()
+            engine = nil
+            result(FlutterError(code: "INIT_ERROR", message: "initEngine returned \(code.rawValue)", details: nil))
+            return
+        }
+
+        // 建立 WebSocket 连接
+        engine?.send(SEDirectiveEventStartConnection)
         result(true)
     }
 
     private func stopDialog(result: FlutterResult) {
-        // SDK: engine?.stopEngine()
-        // SDK: engine = nil
+        if sessionStarted {
+            engine?.send(SEDirectiveEventCancelSession)
+            sessionStarted = false
+        }
+        engine?.send(SEDirectiveEventFinishConnection)
+        engine?.destroy()
+        engine = nil
         pushEvent(["type": "disconnected"])
         result(nil)
     }
 
     private func interrupt(result: FlutterResult) {
-        // SDK: engine?.sendEvent("interrupt", params: "{}")
+        engine?.send(SEDirectiveEventClientInterrupt)
         pushEvent(["type": "interrupted"])
         result(nil)
     }
 
-    // ── 解析 SDK 原始消息 ──────────────────────────────────────────────────────
-    private func handleRawMessage(_ message: String) {
-        guard let data = message.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let msgType = json["message_type"] as? String else { return }
-
-        switch msgType {
-        case "asr.partial_result":
-            if let text = (json["result"] as? [String: Any])?["text"] as? String {
-                pushEvent(["type": "userSpeaking", "text": text])
-            }
-        case "asr.final_result":
-            if let text = (json["result"] as? [String: Any])?["text"] as? String {
-                pushEvent(["type": "userFinalText", "text": text])
-            }
-        case "tts.playback_started":
-            pushEvent(["type": "aiSpeaking"])
-        case "llm.text_delta":
-            if let delta = json["delta"] as? String {
-                pushEvent(["type": "aiTextDelta", "text": delta])
-            }
-        case "tts.playback_finished":
-            pushEvent(["type": "aiRoundDone"])
-        case "dialog.interrupt":
-            pushEvent(["type": "interrupted"])
-        case "error":
-            let errMsg = json["message"] as? String ?? "Unknown error"
-            pushEvent(["type": "error", "error": errMsg])
-        default:
-            break
-        }
-    }
-
-    // ── EventChannel StreamHandler ─────────────────────────────────────────────
-    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    // ── EventChannel StreamHandler ────────────────────────────────────────────
+    func onListen(withArguments arguments: Any?,
+                  eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         eventSink = events
         return nil
     }
@@ -167,28 +157,91 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     private func pushEvent(_ data: [String: Any]) {
-        DispatchQueue.main.async { [weak self] in
-            self?.eventSink?(data)
-        }
+        DispatchQueue.main.async { [weak self] in self?.eventSink?(data) }
     }
 }
 
-// ── SpeechEngineDelegate 实现（SDK 回调）────────────────────────────────────
-// SDK: extension VoiceDialogPlugin: SpeechEngineDelegate {
-//     func onRawMessage(_ message: String) {
-//         handleRawMessage(message)
-//     }
-// }
+// ── SpeechEngineDelegate（SDK 原始消息回调）──────────────────────────────────
+extension VoiceDialogPlugin: SpeechEngineDelegate {
 
-/*
- * ── Podfile 需要添加 ─────────────────────────────────────────────────────────
- *
- * target 'Runner' do
- *   use_frameworks!
- *   pod 'SpeechEngineToB', '0.0.14.3-bugfix'
- *   pod 'SocketRocket',    '0.6.1'
- *   ...
- * end
- *
- * 执行: cd ios && pod install
- */
+    func onMessage(with type: SEMessageType, andData data: Data) {
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return
+        }
+
+        switch type {
+        // 连接事件
+        case SEEventConnectionStarted:
+            // 连接成功后自动开启会话
+            engine?.send(SEDirectiveEventStartSession)
+            sessionStarted = true
+            pushEvent(["type": "connected"])
+
+        case SEEventConnectionFailed:
+            let err = json["message"] as? String ?? "Connection failed"
+            pushEvent(["type": "error", "error": err])
+
+        case SEEventConnectionFinished:
+            pushEvent(["type": "disconnected"])
+
+        // ASR（语音识别）
+        case SEEventASRInfo:
+            // 实时部分结果
+            let text = json["text"] as? String ?? ""
+            if !text.isEmpty {
+                pushEvent(["type": "userSpeaking", "text": text])
+            }
+
+        case SEEventASRResponse:
+            // 最终识别结果
+            let text = json["text"] as? String ?? ""
+            if !text.isEmpty {
+                pushEvent(["type": "userFinalText", "text": text])
+            }
+
+        case SEEventASREnded:
+            break // ASR 结束，无需额外事件
+
+        // LLM（大模型文本流）
+        case SEEventChatResponse:
+            if let delta = json["text"] as? String, !delta.isEmpty {
+                pushEvent(["type": "aiTextDelta", "text": delta])
+            }
+
+        case SEEventChatEnded:
+            break // TTS 结束时一并发 aiRoundDone
+
+        // TTS（语音合成播放）
+        case SEEventTTSSentenceStart:
+            pushEvent(["type": "aiSpeaking"])
+
+        case SEEventTTSSentenceEnd:
+            break
+
+        case SEEventTTSEnded:
+            pushEvent(["type": "aiRoundDone"])
+
+        // 会话事件
+        case SEEventSessionStarted:
+            break
+
+        case SEEventSessionFinished:
+            pushEvent(["type": "aiRoundDone"])
+
+        case SEEventSessionFailed:
+            let err = json["message"] as? String ?? "Session failed"
+            pushEvent(["type": "error", "error": err])
+
+        case SEEventSessionCanceled:
+            break
+
+        // 错误
+        case SEEngineError:
+            let err = json["message"] as? String ?? "Unknown engine error"
+            pushEvent(["type": "error", "error": err])
+
+        default:
+            break
+        }
+    }
+}

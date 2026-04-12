@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "com.example.starpath"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -24,7 +24,7 @@ android {
         applicationId = "com.example.starpath"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 24  // flutter_tts requires minSdk 24+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -45,7 +45,6 @@ flutter {
 
 dependencies {
     // 火山引擎 SpeechEngine Dialog SDK（端到端实时语音大模型）
-    // 获取 AppId/Token 后取消注释以启用
-    // implementation("com.bytedance.speechengine:speechengine_tob:0.0.14.3-bugfix")
-    // implementation("com.squareup.okhttp3:okhttp:4.9.1")
+    implementation("com.bytedance.speechengine:speechengine_tob:0.0.14.5")
+    implementation("com.squareup.okhttp3:okhttp:4.9.1")
 }

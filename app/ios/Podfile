@@ -1,5 +1,8 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '12.0'
+# 火山引擎私有 Pod 源（SpeechEngineToB 所在）
+source 'https://github.com/volcengine/volcengine-specs.git'
+source 'https://cdn.cocoapods.org/'
+
+platform :ios, '13.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -33,9 +36,8 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
   # 火山引擎 SpeechEngine Dialog SDK（端到端实时语音大模型）
-  # 获取 AppId/Token 并准备好 AEC 模型文件后取消注释
-  # pod 'SpeechEngineToB', '0.0.14.3-bugfix'
-  # pod 'SocketRocket',    '0.6.1'
+  pod 'SpeechEngineToB', '0.0.14.5'
+  pod 'SocketRocket',    '0.6.1'
   target 'RunnerTests' do
     inherit! :search_paths
   end
