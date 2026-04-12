@@ -1,6 +1,8 @@
 import 'dart:math';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
@@ -88,6 +90,28 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
   double _vX = 0, _vY = 0;
   bool _isDragging = false;
 
+  // 缩放：基准倍率 + 本次捏合起点
+  double _scale = 1.0;
+  double _scaleStart = 1.0;
+  /// 触控板 PointerPanZoom 手势起点时的缩放值（macOS 双指捏合走此路径）
+  double _panZoomBaseScale = 1.0;
+  static const double _kMinScale = 0.45;
+  static const double _kMaxScale = 2.2;
+
+  /// 地球放大时放宽背面裁剪，使球缘一带更多头像进入可视范围。
+  double get _backfaceZCull {
+    if (_scale <= 1.0) return -0.02;
+    final t = ((_scale - 1.0) / (_kMaxScale - 1.0)).clamp(0.0, 1.0);
+    return -0.02 - 0.24 * t;
+  }
+
+  /// 放大时标题逐渐淡出（scale≤1 为全显，maxScale 时完全隐藏）。
+  double get _nearbyTitleOpacity {
+    if (_scale <= 1.0) return 1.0;
+    final t = ((_scale - 1.0) / (_kMaxScale - 1.0)).clamp(0.0, 1.0);
+    return (1.0 - Curves.easeInOutCubic.transform(t)).clamp(0.0, 1.0);
+  }
+
   late Ticker _ticker;
   Duration? _lastTickTime;
 
@@ -159,7 +183,7 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     final x2 = x0 * cosY + z1 * sinY;
     final z2 = -x0 * sinY + z1 * cosY;
 
-    if (z2 < -0.02) return null;
+    if (z2 < _backfaceZCull) return null;
 
     final depth = ((z2 + 1) / 2).clamp(0.0, 1.0);
     return (
@@ -184,37 +208,74 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
       final bottomSafe = MediaQuery.paddingOf(context).bottom;
       final globeActionsBottom = _kMainNavBarReserve + bottomSafe;
 
-      // 球半径：取宽高较小值的 42%，确保地球完整显示在屏幕内
-      _globeR = (w < h ? w : h) * 0.42;
-      // 球心：水平居中，整体下移 80px
-      // 相对基准下移 60px（原 +80，整体上移 20px）
+      // 球半径：基准值 × 缩放倍率
+      final baseR = (w < h ? w : h) * 0.42;
+      _globeR = baseR * _scale;
+      // 球心：水平居中，整体下移 60px
       _globeCenter = Offset(w / 2, h * 0.42 + 60.0);
 
-      return GestureDetector(
+      return Listener(
+        // macOS / 桌面触控板：双指捏合缩放走 PointerPanZoom，不经过 ScaleGestureRecognizer
+        onPointerPanZoomStart: (PointerPanZoomStartEvent e) {
+          _panZoomBaseScale = _scale;
+        },
+        onPointerPanZoomUpdate: (PointerPanZoomUpdateEvent e) {
+          final next =
+              (_panZoomBaseScale * e.scale).clamp(_kMinScale, _kMaxScale);
+          if ((next - _scale).abs() < 1e-6) return;
+          setState(() => _scale = next);
+        },
+        // ⌘ 或 Ctrl + 双指滑动：与浏览器/地图一致的「滚轮缩放」备用
+        onPointerSignal: (PointerSignalEvent signal) {
+          if (signal is! PointerScrollEvent) return;
+          final keys = HardwareKeyboard.instance.logicalKeysPressed;
+          final cmdOrCtrl = keys.contains(LogicalKeyboardKey.metaLeft) ||
+              keys.contains(LogicalKeyboardKey.metaRight) ||
+              keys.contains(LogicalKeyboardKey.controlLeft) ||
+              keys.contains(LogicalKeyboardKey.controlRight);
+          if (!cmdOrCtrl) return;
+          final dy = signal.scrollDelta.dy;
+          if (dy == 0) return;
+          setState(() {
+            final factor = exp(-dy * 0.0022);
+            _scale = (_scale * factor).clamp(_kMinScale, _kMaxScale);
+          });
+        },
+        child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        // 点击空白区域关闭卡片
+        // 单击空白区域关闭卡片
         onTap: () {
           if (_selected != null) setState(() => _selected = null);
         },
-        onPanStart: (d) {
+        // 双击：重置缩放至 1.0（带弹性感觉）
+        onDoubleTap: () {
+          setState(() => _scale = 1.0);
+        },
+        // onScaleXxx：触摸屏双指捏合；与触控板 PointerPanZoom 互补
+        onScaleStart: (d) {
           _isDragging = true;
           _vX = 0;
           _vY = 0;
-          _startGX = d.globalPosition.dx;
-          _startGY = d.globalPosition.dy;
+          _startGX = d.focalPoint.dx;
+          _startGY = d.focalPoint.dy;
           _rotXStart = _rotX;
           _rotYStart = _rotY;
+          _scaleStart = _scale;
         },
-        onPanUpdate: (d) {
+        onScaleUpdate: (d) {
           setState(() {
-            final dx = d.globalPosition.dx - _startGX;
-            final dy = d.globalPosition.dy - _startGY;
+            // ── 旋转（单指或双指平移分量）────────────────────────────
+            final dx = d.focalPoint.dx - _startGX;
+            final dy = d.focalPoint.dy - _startGY;
             _rotX = (_rotXStart + dy / h * pi * 0.75)
                 .clamp(-pi / 2.05, pi / 2.05);
             _rotY = _rotYStart + dx / w * pi * 1.0;
+            // ── 缩放（双指捏合）─────────────────────────────────────
+            _scale = (_scaleStart * d.scale)
+                .clamp(_kMinScale, _kMaxScale);
           });
         },
-        onPanEnd: (d) {
+        onScaleEnd: (d) {
           _isDragging = false;
           _vX = d.velocity.pixelsPerSecond.dy / h * pi * 2.8;
           _vY = d.velocity.pixelsPerSecond.dx / w * pi * 2.8;
@@ -227,56 +288,78 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
               child: RepaintBoundary(child: _StarfieldBg()),
             ),
 
-            // ② 顶部标题 — 居中于导航栏底部与地球顶部之间
+            // ② 顶部标题 — 放大时随捏合逐渐淡出，缩小后恢复
             Positioned(
               top: (_globeCenter.dy - _globeR) * 0.18,
               bottom: h - (_globeCenter.dy - _globeR) + 8,
               left: 0,
               right: 0,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 14),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ShaderMask(
-                        shaderCallback: (bounds) => const LinearGradient(
-                          colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ).createShader(bounds),
-                        child: const Text(
-                          '在全球寻找你的',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 2.5,
-                          height: 1.3,
+              child: IgnorePointer(
+                ignoring: _nearbyTitleOpacity < 0.05,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  opacity: _nearbyTitleOpacity,
+                  child: AnimatedSlide(
+                    duration: const Duration(milliseconds: 240),
+                    curve: Curves.easeOutCubic,
+                    // 淡出时略向上移，避免与放大的地球抢视觉
+                    offset: Offset(0, -0.12 * (1.0 - _nearbyTitleOpacity)),
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ShaderMask(
+                              shaderCallback: (bounds) =>
+                                  const LinearGradient(
+                                    colors: [
+                                      Color(0xFFFFFFFF),
+                                      Color(0xFFCB9EFF),
+                                    ],
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                  ).createShader(bounds),
+                              child: const Text(
+                                '在全球寻找你的',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                  letterSpacing: 2.5,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            ShaderMask(
+                              shaderCallback: (bounds) =>
+                                  const LinearGradient(
+                                    colors: [
+                                      Color(0xFFFFFFFF),
+                                      Color(0xFFCB9EFF),
+                                    ],
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                  ).createShader(bounds),
+                              child: const Text(
+                                'Agent 伙伴',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                  letterSpacing: 2.0,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    ShaderMask(
-                      shaderCallback: (bounds) => const LinearGradient(
-                        colors: [Color(0xFFFFFFFF), Color(0xFFCB9EFF)],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ).createShader(bounds),
-                      child: const Text(
-                        'Agent 伙伴',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 2.0,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                    ],
                   ),
                 ),
               ).animate().fadeIn(duration: 700.ms).slideY(begin: -0.12, curve: Curves.easeOut),
@@ -378,6 +461,7 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
 
           ],
         ),
+        ),
       );
     });
   }
@@ -390,7 +474,6 @@ class _NearbyGlobePageState extends State<NearbyGlobePage>
     for (final agent in _mockAgents) {
       final r = _project(agent.lat, agent.lng, center, globeR);
       if (r == null) continue;
-      if (r.depth < 0.06) continue;
       projected.add((agent: agent, pos: r.pos, depth: r.depth));
     }
 
