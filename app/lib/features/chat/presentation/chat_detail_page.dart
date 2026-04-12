@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,12 +9,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:video_player/video_player.dart';
+import 'package:go_router/go_router.dart';
 import 'package:starpath/core/constants.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/chat/data/chat_providers.dart';
+import 'package:starpath/features/chat/data/main_partner_provider.dart';
 import 'package:starpath/features/chat/domain/chat_model.dart';
+import 'package:starpath/features/voice_dialog/voice_dialog_bridge.dart';
 
 Color _hexToColor(String hex) {
   hex = hex.replaceFirst('#', '');
@@ -29,6 +35,44 @@ const List<String> _kIpAvatars = [
   'images/ip5.png',
   'images/ip7.png',
 ];
+
+/// 沉浸页角色视频相对「铺满视口」的缩放（<1 略缩小，四周留黑边）
+const double _kChatHeroVideoScaleFactor = 0.78;
+
+/// AI 伙伴对话页全屏底色
+const Color _kChatPageBackground = Color(0xFF18082A);
+
+/// 伙伴回复气泡底色（不透明）
+const Color _kPartnerReplyBubbleColor = Color(0xFF341545);
+
+/// 颜色矩阵：将像素亮度映射到 alpha 通道，黑色→透明、亮色→不透明。
+/// 通过 ColorFilterLayer 在合成器层面生效，能作用于 VideoPlayer 的 TextureLayer。
+/// A' = 0.30R + 0.59G + 0.11B − 0.10（负偏移让近黑区也透明，过渡更干净）
+const ColorFilter _kBlackRemovalFilter = ColorFilter.matrix(<double>[
+  //  R      G      B      A    offset
+      1,     0,     0,     0,   0,      // R' = R
+      0,     1,     0,     0,   0,      // G' = G
+      0,     0,     1,     0,   0,      // B' = B
+      0.30,  0.59,  0.11,  0,  -0.10,  // A' = luma − 0.10
+]);
+
+/// 与页面蓝紫底呼应的渐变，经 [ShaderMask] + [BlendMode.screen] 与视频逐像素滤色混合。
+/// 说明：canvas.saveLayer 无法可靠作用在 VideoPlayer 的 Texture 上；ShaderMask 走另一套合成路径。
+Shader _chatHeroScreenBlendShader(Rect bounds) {
+  return const LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFF4D96FF),
+      Color(0xFF6366F1),
+      Color(0xFF9B72FF),
+    ],
+    stops: [0.0, 0.48, 1.0],
+  ).createShader(bounds);
+}
+
+/// 对话页四段视频阶段（与 Spotlight 卡片保持一致）
+enum _ChatVideoPhase { hello, hait, breathe, down }
 
 /// 文字输入栏上方快捷推荐语（emoji + 文案）
 const List<(String emoji, String text)> _kChatQuickSuggests = [
@@ -70,10 +114,24 @@ class ChatDetailPage extends ConsumerStatefulWidget {
   /// 仅传 agentId 时，页面内部自动 findOrCreate 会话
   final String? agentId;
 
+  /// 从 Spotlight 卡片进入时传入的角色专属视频
+  final String? helloVideo;
+  final String? haitVideo;
+  final String? breatheVideo;
+  final String? downVideo;
+
+  /// 从 Spotlight 卡片传入的显示名称（后端未响应前优先展示）
+  final String? agentName;
+
   const ChatDetailPage({
     super.key,
     this.conversationId,
     this.agentId,
+    this.helloVideo,
+    this.haitVideo,
+    this.breatheVideo,
+    this.downVideo,
+    this.agentName,
   }) : assert(
           conversationId != null || agentId != null,
           'conversationId or agentId is required',
@@ -106,24 +164,45 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   // 防止无后端时 _isThinking 永不清除：发消息后 60s 若无响应则自动复位
   static const _kThinkingTimeout = Duration(seconds: 60);
+  Timer? _thinkingTimer;
 
   // 已稳定渲染的消息数量（用于区分"新消息"与历史消息）
   int _settledCount = 0;
 
-  // ── 视频背景 ──────────────────────────────────────────────────────────────
-  // ── 角色动画：jq.mp4 = 打招呼（单次），jq2.mp4 = 待机（循环）────────────────
-  late VideoPlayerController _greetCtrl;   // jq.mp4
-  late VideoPlayerController _idleCtrl;    // jq2.mp4
-  bool _greetReady = false;
-  bool _idleReady = false;
-  /// true = 正在播打招呼；false = 待机循环中
-  bool _isGreeting = true;
+  // ── 视频背景：hello(×1)→hait(×1)→breathe(∞)；点击→down(×1)→hait(×1)→breathe(∞) ──
+  VideoPlayerController? _helloCtrl;
+  VideoPlayerController? _haitCtrl;
+  VideoPlayerController? _breatheCtrl;
+  VideoPlayerController? _downCtrl;
+  bool _videoReady = false;
+  /// 当前播放阶段（同 Spotlight 卡片）
+  _ChatVideoPhase _videoPhase = _ChatVideoPhase.hello;
 
   // ── 语音识别（默认连续聆听，无弹窗）──────────────────────────────────────────
   final SpeechToText _stt = SpeechToText();
   bool _sttAvailable = false;
   /// 沉浸页实时识别文案（有消息时也可在后台识别并自动发送）
   String _voiceTranscript = '';
+
+  // ── TTS：语音发话后，在回复完成时朗读助手文本 ───────────────────────────────
+  final FlutterTts _tts = FlutterTts();
+  bool _ttsReady = false;
+  bool _pendingSpeakAssistantReply = false;
+  bool _ttsPlaying = false;
+
+  // ── 火山引擎实时语音对话桥接（接入 SDK 后替代 STT + TTS 方案）──────────────
+  final VoiceDialogBridge _voiceBridge = VoiceDialogBridge();
+  StreamSubscription<VoiceDialogEvent>? _voiceBridgeSub;
+  /// 当前 AI 正在通过 SDK 说话（用于 UI 指示 / 打断按钮）
+  bool _sdkAiSpeaking = false;
+  /// 已通过 SDK 收到的 AI 回复文本（流式拼接）
+  String _sdkAiBuffer = '';
+
+  /// 是否使用火山引擎 SDK（设置 appId/token 后改为 true）
+  static const bool _useVolcSdk = false;
+  // 替换为你的真实 AppId 和 Access Token
+  static const String _volcAppId    = 'YOUR_VOLC_APP_ID';
+  static const String _volcAppToken = 'YOUR_VOLC_APP_TOKEN';
 
   /// 无历史消息且未切键盘：展示底部语音沉浸栏；有历史消息：始终可语音。
   /// WebSocket 未连上但 REST 已拿到会话时，不再显示「连接中」。
@@ -136,14 +215,20 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   bool get _shouldRunContinuousVoice =>
       _sttAvailable &&
       _conversation != null &&
+      !_ttsPlaying &&        // TTS 说话时暂停，避免把 AI 音频当用户输入
+      !_isThinking &&        // AI 思考时暂停，减少不必要的音频冲突
       (_messages.isNotEmpty || !_showTextInput);
 
   @override
   void initState() {
     super.initState();
     _loadConversation();
-    _messageController.addListener(() => setState(() {}));
-    _initStt();
+    if (_useVolcSdk) {
+      _initVolcVoice();
+    } else {
+      _initStt();
+      _initTts();
+    }
     _initBgVideo();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _continuousVoiceWorker();
@@ -156,66 +241,151 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       ? VideoPlayerController.networkUrl(Uri.parse('assets/$asset'))
       : VideoPlayerController.asset(asset);
 
+  Future<VideoPlayerController?> _initOne(String? asset,
+      {required bool loop}) async {
+    if (asset == null) return null;
+    final c = _makeCtrl(asset);
+    try {
+      await c.initialize();
+      if (!mounted) { await c.dispose(); return null; }
+      await c.setLooping(loop);
+      await c.setVolume(0);
+      return c;
+    } catch (e) {
+      debugPrint('[BgVideo] $asset: $e');
+      await c.dispose();
+      return null;
+    }
+  }
+
   Future<void> _initBgVideo() async {
-    _greetCtrl = _makeCtrl('video/jq.mp4');
-    _idleCtrl  = _makeCtrl('video/jq2.mp4');
-    try {
-      // 同时初始化两个控制器
-      await Future.wait([
-        _greetCtrl.initialize(),
-        _idleCtrl.initialize(),
-      ]);
-      await _greetCtrl.setLooping(false);
-      await _greetCtrl.setVolume(0);
-      await _idleCtrl.setLooping(true);
-      await _idleCtrl.setVolume(0);
+    // 优先用 Spotlight 卡片传入的素材，否则回退到默认两段视频
+    final helloAsset   = widget.helloVideo   ?? 'video/jq.mp4';
+    final haitAsset    = widget.haitVideo    ?? 'video/jq2.mp4';
+    final breatheAsset = widget.breatheVideo;   // 无默认
+    final downAsset    = widget.downVideo;       // 无默认
 
-      _greetCtrl.addListener(_onGreetListener);
+    final results = await Future.wait([
+      _initOne(helloAsset,   loop: false),
+      _initOne(haitAsset,    loop: false),
+      _initOne(breatheAsset, loop: true),
+      _initOne(downAsset,    loop: false),
+    ]);
+    if (!mounted) return;
+    _helloCtrl   = results[0];
+    _haitCtrl    = results[1];
+    _breatheCtrl = results[2];
+    _downCtrl    = results[3];
+    if (mounted) setState(() => _videoReady = true);
+    _bgBeginHello();
+  }
 
-      // 进入页面先播打招呼
-      _isGreeting = true;
-      await _greetCtrl.play();
-
-      if (mounted) setState(() { _greetReady = true; _idleReady = true; });
-    } catch (e, st) {
-      debugPrint('[BgVideo] init failed: $e\n$st');
+  // ── hello(×1) ──────────────────────────────────────────────────
+  Future<void> _bgBeginHello() async {
+    if (!mounted) return;
+    final c = _helloCtrl;
+    if (c != null) {
+      await c.seekTo(Duration.zero);
+      c.addListener(_bgOnHelloTick);
+      await c.play();
+      if (mounted) setState(() => _videoPhase = _ChatVideoPhase.hello);
+    } else {
+      _bgBeginHait();
     }
   }
 
-  /// 监听打招呼视频：播完后切换为待机循环
-  void _onGreetListener() {
-    if (!mounted) return;
-    final v = _greetCtrl.value;
-    if (!v.isInitialized || v.duration == Duration.zero) return;
-    final ended = !v.isPlaying &&
-        v.position + const Duration(milliseconds: 300) >= v.duration;
-    if (ended && _isGreeting) {
-      _switchToIdle();
+  void _bgOnHelloTick() {
+    final c = _helloCtrl;
+    if (c == null || !c.value.isInitialized) return;
+    final dur = c.value.duration;
+    if (dur == Duration.zero) return;
+    if (c.value.position + const Duration(milliseconds: 100) >= dur) {
+      c.removeListener(_bgOnHelloTick);
+      c.pause();
+      _bgBeginHait();
     }
   }
 
-  Future<void> _switchToIdle() async {
+  // ── hait(×1) → breathe(∞) ──────────────────────────────────────
+  Future<void> _bgBeginHait() async {
     if (!mounted) return;
-    setState(() => _isGreeting = false);
-    try {
-      await _greetCtrl.seekTo(Duration.zero); // 归位，下次点击可立即播
-      await _idleCtrl.seekTo(Duration.zero);
-      await _idleCtrl.play();
-    } catch (_) {}
+    final c = _haitCtrl;
+    if (c != null) {
+      await c.seekTo(Duration.zero);
+      c.addListener(_bgOnHaitTick);
+      await c.play();
+      if (mounted) setState(() => _videoPhase = _ChatVideoPhase.hait);
+    } else {
+      _bgBeginBreathe();
+    }
   }
 
-  /// 用户点击热区：待机中才触发打招呼；打招呼播放中忽略
+  void _bgOnHaitTick() {
+    final c = _haitCtrl;
+    if (c == null || !c.value.isInitialized) return;
+    final dur = c.value.duration;
+    if (dur == Duration.zero) return;
+    if (c.value.position + const Duration(milliseconds: 100) >= dur) {
+      c.removeListener(_bgOnHaitTick);
+      c.pause();
+      _bgBeginBreathe();
+    }
+  }
+
+  Future<void> _bgBeginBreathe() async {
+    if (!mounted) return;
+    final c = _breatheCtrl;
+    if (c != null) {
+      await c.seekTo(Duration.zero);
+      await c.play();
+      if (mounted) setState(() => _videoPhase = _ChatVideoPhase.breathe);
+    }
+  }
+
+  // ── 用户点击热区：down(×1) → hait → breathe ────────────────────
   Future<void> _replayBgVideoFromHotZone() async {
-    if (!_greetReady || !_idleReady) return;
-    if (_isGreeting) return; // 打招呼正在播，忽略重复点击
-    try {
-      await _idleCtrl.pause();
-      setState(() => _isGreeting = true);
-      await _greetCtrl.seekTo(Duration.zero);
-      await _greetCtrl.play();
-    } catch (e, st) {
-      debugPrint('[BgVideo] replay failed: $e\n$st');
-      if (mounted) setState(() => _isGreeting = false);
+    if (!_videoReady) return;
+    final down = _downCtrl;
+    if (down == null || !down.value.isInitialized) {
+      // 没有 down 素材 → 重播 hello
+      _bgPauseCurrent();
+      _bgBeginHello();
+      return;
+    }
+    if (_videoPhase == _ChatVideoPhase.down) return;
+    HapticFeedback.lightImpact();
+    _bgPauseCurrent();
+    await down.seekTo(Duration.zero);
+    down.addListener(_bgOnDownTick);
+    await down.play();
+    if (mounted) setState(() => _videoPhase = _ChatVideoPhase.down);
+  }
+
+  void _bgOnDownTick() {
+    final c = _downCtrl;
+    if (c == null || !c.value.isInitialized) return;
+    final dur = c.value.duration;
+    if (dur == Duration.zero) return;
+    if (c.value.position + const Duration(milliseconds: 100) >= dur) {
+      c.removeListener(_bgOnDownTick);
+      c.pause();
+      c.seekTo(Duration.zero);
+      _bgBeginHait();
+    }
+  }
+
+  void _bgPauseCurrent() {
+    switch (_videoPhase) {
+      case _ChatVideoPhase.hello:
+        _helloCtrl?.removeListener(_bgOnHelloTick);
+        _helloCtrl?.pause();
+      case _ChatVideoPhase.hait:
+        _haitCtrl?.removeListener(_bgOnHaitTick);
+        _haitCtrl?.pause();
+      case _ChatVideoPhase.breathe:
+        _breatheCtrl?.pause();
+      case _ChatVideoPhase.down:
+        break;
     }
   }
 
@@ -224,12 +394,170 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     if (mounted) setState(() => _sttAvailable = ok);
   }
 
+  Future<void> _initTts() async {
+    try {
+      await _tts.setLanguage('zh-CN');
+      await _tts.setSpeechRate(0.48);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
+      // TTS 开始播放：暂停 STT
+      _tts.setStartHandler(() {
+        if (mounted) setState(() => _ttsPlaying = true);
+      });
+      // TTS 播放完毕：恢复 STT（continuous worker 自动重启 listen）
+      _tts.setCompletionHandler(() {
+        if (mounted) setState(() => _ttsPlaying = false);
+      });
+      _tts.setCancelHandler(() {
+        if (mounted) setState(() => _ttsPlaying = false);
+      });
+      _tts.setErrorHandler((msg) {
+        debugPrint('[TTS] error: $msg');
+        if (mounted) setState(() => _ttsPlaying = false);
+      });
+      if (mounted) setState(() => _ttsReady = true);
+    } catch (e) {
+      debugPrint('[TTS] init failed: $e');
+    }
+  }
+
+  // ── 火山引擎 SDK 实时对话 ────────────────────────────────────────────────────
+
+  Future<void> _initVolcVoice() async {
+    await _voiceBridge.prepareEnvironment();
+    _voiceBridgeSub = _voiceBridge.events.listen(_onVolcEvent);
+    final ok = await _voiceBridge.startDialog(const VoiceDialogConfig(
+      appId:    _volcAppId,
+      appToken: _volcAppToken,
+    ));
+    if (!ok && mounted) {
+      debugPrint('[VolcVoice] startDialog failed, fallback to STT/TTS');
+      await _initStt();
+      await _initTts();
+    }
+  }
+
+  void _onVolcEvent(VoiceDialogEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case VoiceDialogEventType.connected:
+        debugPrint('[VolcVoice] connected');
+
+      case VoiceDialogEventType.userSpeaking:
+        // 实时显示用户正在说的内容
+        setState(() => _voiceTranscript = event.text ?? '');
+
+      case VoiceDialogEventType.userFinalText:
+        // 用户一句话结束，添加消息气泡
+        final text = event.text ?? '';
+        if (text.isNotEmpty && !_isThinking) {
+          setState(() {
+            _voiceTranscript = '';
+            _messages.add(MessageModel(
+              role: 'user',
+              content: text,
+              createdAt: DateTime.now(),
+            ));
+            _isThinking = true;
+            _sdkAiBuffer = '';
+          });
+          _scrollToBottom();
+        }
+
+      case VoiceDialogEventType.aiSpeaking:
+        setState(() {
+          _sdkAiSpeaking = true;
+          _sdkAiBuffer = '';
+          // 开始 AI 消息气泡
+          if (_messages.isEmpty || _messages.last.isUser) {
+            _messages.add(MessageModel(
+              role: 'assistant',
+              content: '',
+              createdAt: DateTime.now(),
+            ));
+          }
+        });
+        // AI 开口时播放 down 动画
+        _replayBgVideoFromHotZone();
+
+      case VoiceDialogEventType.aiTextDelta:
+        // 流式文本拼到最后一条 assistant 消息
+        final delta = event.text ?? '';
+        if (delta.isNotEmpty) {
+          setState(() {
+            _sdkAiBuffer += delta;
+            if (_messages.isNotEmpty && !_messages.last.isUser) {
+              _messages[_messages.length - 1] = MessageModel(
+                role: 'assistant',
+                content: _sdkAiBuffer,
+                createdAt: _messages.last.createdAt,
+              );
+            }
+          });
+          _scrollToBottom();
+        }
+
+      case VoiceDialogEventType.aiRoundDone:
+        setState(() {
+          _sdkAiSpeaking = false;
+          _isThinking = false;
+          _settledCount = _messages.length;
+        });
+        HapticFeedback.lightImpact();
+        ref.invalidate(conversationsProvider);
+
+      case VoiceDialogEventType.interrupted:
+        setState(() => _sdkAiSpeaking = false);
+
+      case VoiceDialogEventType.error:
+        debugPrint('[VolcVoice] error: ${event.errorMessage}');
+        setState(() {
+          _isThinking = false;
+          _sdkAiSpeaking = false;
+        });
+
+      case VoiceDialogEventType.disconnected:
+        setState(() {
+          _sdkAiSpeaking = false;
+          _isThinking = false;
+        });
+    }
+  }
+
+  Future<void> _stopAssistantSpeech() async {
+    try {
+      await _tts.stop();
+      if (mounted) setState(() => _ttsPlaying = false);
+    } catch (_) {}
+  }
+
+  Future<void> _speakAssistantReplyIfNeeded() async {
+    final should = _pendingSpeakAssistantReply;
+    _pendingSpeakAssistantReply = false;
+    if (!should || !_ttsReady || !mounted) return;
+    if (_messages.isEmpty) return;
+    final last = _messages.last;
+    if (last.isUser) return;
+    final text = last.content.trim();
+    if (text.isEmpty) return;
+    try {
+      // 先停掉 STT，再开始 TTS，彻底避免音频冲突
+      await _stt.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _tts.stop();
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('[TTS] speak failed: $e');
+      if (mounted) setState(() => _ttsPlaying = false);
+    }
+  }
+
   void _onSpeechResult(SpeechRecognitionResult result) {
     if (!mounted) return;
     final words = result.recognizedWords;
     setState(() => _voiceTranscript = words);
     if (result.finalResult && words.trim().isNotEmpty && !_isThinking) {
-      _sendVoiceMessage(words.trim());
+      _sendVoiceMessage(words.trim(), speakAssistantReply: true);
       if (mounted) setState(() => _voiceTranscript = '');
     }
   }
@@ -266,8 +594,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     }
   }
 
-  void _sendVoiceMessage(String text) {
+  void _sendVoiceMessage(String text, {bool speakAssistantReply = false}) {
     if (text.isEmpty || _isThinking) return;
+
+    unawaited(_stopAssistantSpeech());
+    if (speakAssistantReply) {
+      _pendingSpeakAssistantReply = true;
+    }
 
     final authState = ref.read(authProvider);
     final userId = authState.userId ?? '';
@@ -295,10 +628,17 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   @override
   void dispose() {
-    _greetCtrl.removeListener(_onGreetListener);
-    _greetCtrl.dispose();
-    _idleCtrl.dispose();
+    _thinkingTimer?.cancel();
+    _bgPauseCurrent();
+    _helloCtrl?.dispose();
+    _haitCtrl?.dispose();
+    _breatheCtrl?.dispose();
+    _downCtrl?.removeListener(_bgOnDownTick);
+    _downCtrl?.dispose();
     _stt.stop();
+    unawaited(_stopAssistantSpeech());
+    unawaited(_voiceBridgeSub?.cancel());
+    unawaited(_voiceBridge.dispose());
     _socket?.disconnect();
     _socket?.dispose();
     _messageController.dispose();
@@ -429,6 +769,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         });
         HapticFeedback.lightImpact();
         ref.invalidate(conversationsProvider);
+        unawaited(_speakAssistantReplyIfNeeded());
       }
     });
 
@@ -436,6 +777,8 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       final msg = (data as Map<dynamic, dynamic>)['message'] as String? ??
           'AI 服务暂时不可用';
       if (mounted) {
+        _pendingSpeakAssistantReply = false;
+        unawaited(_stopAssistantSpeech());
         setState(() => _isThinking = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -463,8 +806,11 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   }
 
   void _startThinkingTimeout() {
-    Future.delayed(_kThinkingTimeout, () {
+    _thinkingTimer?.cancel();
+    _thinkingTimer = Timer(_kThinkingTimeout, () {
       if (mounted && _isThinking) {
+        _pendingSpeakAssistantReply = false;
+        unawaited(_stopAssistantSpeech());
         setState(() {
           _isThinking = false;
           _streamingContent = '';
@@ -510,24 +856,35 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
             : _showTextInput;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: _kChatPageBackground,
       resizeToAvoidBottomInset: true,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // ── 角色视频背景：打招呼（单次）→ 待机循环；点击热区触发打招呼 ──────
-          if (_greetReady && _idleReady)
+          const Positioned.fill(
+              child: ColoredBox(color: _kChatPageBackground)),
+          // ── 角色视频：黑底抠 alpha + ShaderMask 滤色与渐变 shader 混合 ───
+          if (_videoReady)
             Positioned.fill(
               child: LayoutBuilder(
                 builder: (context, box) {
-                  final ctrl = _isGreeting ? _greetCtrl : _idleCtrl;
+                  final VideoPlayerController? ctrl = switch (_videoPhase) {
+                    _ChatVideoPhase.hello   => _helloCtrl,
+                    _ChatVideoPhase.hait    => _haitCtrl,
+                    _ChatVideoPhase.breathe => _breatheCtrl,
+                    _ChatVideoPhase.down    => _downCtrl,
+                  };
+                  if (ctrl == null || !ctrl.value.isInitialized) {
+                    return const SizedBox.shrink();
+                  }
                   final videoSize = ctrl.value.size;
                   if (videoSize == Size.zero) {
-                    return const ColoredBox(color: Colors.black);
+                    return const SizedBox.shrink();
                   }
                   final scaleW = box.maxWidth / videoSize.width;
                   final scaleH = box.maxHeight / videoSize.height;
-                  final scale = scaleW > scaleH ? scaleW : scaleH;
+                  final coverScale = scaleW > scaleH ? scaleW : scaleH;
+                  final scale = coverScale * _kChatHeroVideoScaleFactor;
                   return ClipRect(
                     child: OverflowBox(
                       maxWidth: double.infinity,
@@ -537,16 +894,21 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                         child: SizedBox(
                           width: videoSize.width,
                           height: videoSize.height,
-                          child: VideoPlayer(ctrl),
+                          child: ShaderMask(
+                            blendMode: BlendMode.screen,
+                            shaderCallback: _chatHeroScreenBlendShader,
+                            child: ColorFiltered(
+                              colorFilter: _kBlackRemovalFilter,
+                              child: VideoPlayer(ctrl),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   );
                 },
               ),
-            )
-          else
-            const ColoredBox(color: Colors.black),
+            ),
           // ── 聊天时：全屏黑色蒙层盖住视频（不用 BackdropFilter 避免导航过渡残影）
           if (hasMessages)
             const Positioned.fill(
@@ -568,7 +930,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                       fit: StackFit.expand,
                       children: [
                         // 热区在下层：全宽条带，列表/沉浸内容在上层
-                        if (_greetReady && _idleReady)
+                        if (_videoReady)
                           Positioned(
                             left: 0,
                             right: 0,
@@ -604,6 +966,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   // ── 自定义顶栏 ────────────────────────────────────────────────────────────
 
+  /// 与 Spotlight 长卡片 [agentName] 一致；无 query 时再显示会话里的 Agent 名。
+  String _topBarAgentTitle(AgentBrief? agent) {
+    final fromCard = widget.agentName?.trim();
+    if (fromCard != null && fromCard.isNotEmpty) return fromCard;
+    return agent?.name ?? 'AI 伙伴';
+  }
+
   Widget _buildTopBar(AgentBrief? agent, Color gradStart, Color gradEnd) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -636,7 +1005,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  agent?.name ?? 'AI 伙伴',
+                  _topBarAgentTitle(agent),
                   style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
@@ -671,21 +1040,118 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
               ],
             ),
           ),
-          // 更多按钮
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color:
-                  StarpathColors.surfaceContainerHigh.withValues(alpha: 0.75),
-              border: Border.all(
-                  color: StarpathColors.outlineVariant, width: 0.8),
+          // 右侧操作按钮：设定主伙伴 / 更换伙伴
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              _showPartnerOptions(context);
+            },
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: StarpathColors.surfaceContainerHigh
+                    .withValues(alpha: 0.75),
+                border: Border.all(
+                    color: StarpathColors.outlineVariant, width: 0.8),
+              ),
+              child: const Icon(Icons.more_horiz_rounded,
+                  size: 20, color: StarpathColors.onSurface),
             ),
-            child: const Icon(Icons.more_horiz_rounded,
-                size: 20, color: StarpathColors.onSurface),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── 右侧菜单：设定主伙伴 / 更换伙伴 ──────────────────────────────────────
+
+  void _showPartnerOptions(BuildContext ctx) {
+    showModalBottomSheet<void>(
+      context: ctx,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1235),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: StarpathColors.outlineVariant.withValues(alpha: 0.5),
+                width: 0.8),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: StarpathColors.outlineVariant.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _PartnerOptionTile(
+                icon: Icons.star_rounded,
+                iconColor: const Color(0xFFFFD700),
+                label: '设定为主伙伴',
+                subtitle: '点击中间导航按钮时直接进入此伙伴',
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _setAsMainPartner(ctx);
+                },
+              ),
+              Divider(
+                height: 1,
+                indent: 16,
+                endIndent: 16,
+                color: StarpathColors.outlineVariant.withValues(alpha: 0.3),
+              ),
+              _PartnerOptionTile(
+                icon: Icons.swap_horiz_rounded,
+                iconColor: StarpathColors.primary,
+                label: '更换伙伴',
+                subtitle: '前往伙伴列表选择其他 AI',
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  ctx.go('/agents');
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _setAsMainPartner(BuildContext ctx) {
+    final agentId = widget.agentId;
+    final agentName = widget.agentName;
+
+    if (agentId == null || agentId.isEmpty) return;
+
+    final partner = MainPartnerState(
+      agentId:      agentId,
+      agentName:    agentName ?? agentId,
+      helloVideo:   widget.helloVideo,
+      haitVideo:    widget.haitVideo,
+      breatheVideo: widget.breatheVideo,
+      downVideo:    widget.downVideo,
+    );
+
+    ref.read(mainPartnerProvider.notifier).setMainPartner(partner);
+
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      SnackBar(
+        content: Text('已将「${partner.agentName}」设定为主伙伴'),
+        duration: const Duration(seconds: 2),
+        backgroundColor: const Color(0xFF2D1B5E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -865,14 +1331,19 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                 onTap: () => Navigator.of(context).pop(),
               ),
               const SizedBox(width: 20),
-              // 语音模式中心按钮：可点击，确认停留在语音状态（触觉反馈）
+              // 语音模式中心按钮：
+          // - SDK 模式：AI 说话时变为「打断」按钮，其余时间为麦克风
+          // - 普通模式：始终为麦克风图标
               _VoiceButton(
-                icon: Icons.mic_rounded,
+                icon: (_useVolcSdk && _sdkAiSpeaking)
+                    ? Icons.stop_circle_outlined
+                    : Icons.mic_rounded,
                 highlight: true,
                 onTap: () {
                   HapticFeedback.mediumImpact();
-                  // 若因某种原因意外处于聊天模式，点此强制回到语音模式
-                  if (!_voiceBarWithMessages) {
+                  if (_useVolcSdk && _sdkAiSpeaking) {
+                    unawaited(_voiceBridge.interrupt());
+                  } else if (!_voiceBarWithMessages) {
                     FocusScope.of(context).unfocus();
                     setState(() => _voiceBarWithMessages = true);
                   }
@@ -940,21 +1411,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                     horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   gradient: isUser ? _kInputFieldBluePurple : null,
-                  color: isUser
-                      ? null
-                      : Colors.white.withValues(alpha: 0.10),
+                  color: isUser ? null : _kPartnerReplyBubbleColor,
                   borderRadius: BorderRadius.only(
                     topLeft: const Radius.circular(20),
                     topRight: const Radius.circular(20),
                     bottomLeft: Radius.circular(isUser ? 20 : 6),
                     bottomRight: Radius.circular(isUser ? 6 : 20),
                   ),
-                  border: isUser
-                      ? null
-                      : Border.all(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          width: 0.8,
-                        ),
                   boxShadow: [
                     BoxShadow(
                       color: isUser
@@ -1149,8 +1612,6 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   }
 
   Widget _buildInputBar(Color gradStart, Color gradEnd) {
-    final canSend =
-        !_isThinking && _messageController.text.trim().isNotEmpty;
     final showQuickSuggests = _showTextInput || _messages.isNotEmpty;
     final hasMsgs = _messages.isNotEmpty || _isThinking;
 
@@ -1235,11 +1696,14 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _SendButton(
-                    canSend: canSend,
-                    gradStart: gradStart,
-                    gradEnd: gradEnd,
-                    onSend: _sendMessage,
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _messageController,
+                    builder: (_, value, __) => _SendButton(
+                      canSend: !_isThinking && value.text.trim().isNotEmpty,
+                      gradStart: gradStart,
+                      gradEnd: gradEnd,
+                      onSend: _sendMessage,
+                    ),
                   ),
                 ],
               ),
@@ -1912,6 +2376,68 @@ class _VoiceButtonState extends State<_VoiceButton> {
                 ? Colors.white
                 : StarpathColors.onSurfaceVariant,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── 底部菜单选项行 ──────────────────────────────────────────────────────────
+
+class _PartnerOptionTile extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _PartnerOptionTile({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.45),
+                          fontSize: 12)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded,
+                color: Colors.white.withValues(alpha: 0.3), size: 20),
+          ],
         ),
       ),
     );

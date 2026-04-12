@@ -23,7 +23,6 @@ class _ChatListPageState extends ConsumerState<ChatListPage> {
   @override
   void initState() {
     super.initState();
-    _searchCtrl.addListener(() => setState(() {}));
   }
 
   @override
@@ -198,24 +197,27 @@ class _ChatListPageState extends ConsumerState<ChatListPage> {
   Widget _buildSearchField() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: TextField(
-        controller: _searchCtrl,
-        autofocus: true,
-        onChanged: (v) {
-          ref.read(userDmSearchQueryProvider.notifier).state = v;
-        },
-        decoration: InputDecoration(
-          hintText: '搜索联系人…',
-          prefixIcon: const Icon(Icons.search_rounded, size: 22),
-          suffixIcon: _searchCtrl.text.isEmpty
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.clear_rounded),
-                  onPressed: () {
-                    _searchCtrl.clear();
-                    ref.read(userDmSearchQueryProvider.notifier).state = '';
-                  },
-                ),
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: _searchCtrl,
+        builder: (_, value, __) => TextField(
+          controller: _searchCtrl,
+          autofocus: true,
+          onChanged: (v) {
+            ref.read(userDmSearchQueryProvider.notifier).state = v;
+          },
+          decoration: InputDecoration(
+            hintText: '搜索联系人…',
+            prefixIcon: const Icon(Icons.search_rounded, size: 22),
+            suffixIcon: value.text.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.clear_rounded),
+                    onPressed: () {
+                      _searchCtrl.clear();
+                      ref.read(userDmSearchQueryProvider.notifier).state = '';
+                    },
+                  ),
+          ),
         ),
       ),
     );
@@ -223,7 +225,40 @@ class _ChatListPageState extends ConsumerState<ChatListPage> {
 
   Widget _buildNoSearchResults(BuildContext context) {
     final q = ref.watch(userDmSearchQueryProvider).trim();
-    if (q.isEmpty) return const SizedBox.shrink();
+    if (q.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 64, horizontal: 32),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 48,
+                color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.4),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '还没有对话',
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: StarpathColors.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '去 AI 伙伴页选一个角色开始聊天吧',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: StarpathColors.onSurfaceVariant
+                          .withValues(alpha: 0.6),
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 32),
       child: Center(
@@ -876,11 +911,22 @@ class StartChatButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return GestureDetector(
       onTap: () async {
-        final repo = ref.read(chatRepositoryProvider);
-        final conv = await repo.createConversation(agentId);
-        if (context.mounted) {
-          ref.invalidate(conversationsProvider);
-          context.push('/chat/${conv.id}');
+        try {
+          final repo = ref.read(chatRepositoryProvider);
+          final conv = await repo.createConversation(agentId);
+          if (context.mounted) {
+            ref.invalidate(conversationsProvider);
+            context.push('/chat/${conv.id}');
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('无法发起对话，请检查网络连接'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
         }
       },
       child: Container(

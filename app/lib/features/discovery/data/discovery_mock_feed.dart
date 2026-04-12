@@ -54,14 +54,46 @@ List<ContentCardModel> discoveryMockFeedItems() {
   ];
 
   const users = [
-    ('u001', '星际旅人', null),
-    ('u002', '代码诗人', null),
-    ('u003', '夜猫设计师', null),
-    ('u004', '像素画家', null),
-    ('u005', '晨光摄影师', null),
-    ('u006', 'AI 探索者', null),
-    ('u007', '极光追逐者', null),
-    ('u008', '数字游民', null),
+    (
+      'u001',
+      '星际旅人',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u001&size=128'
+    ),
+    (
+      'u002',
+      '代码诗人',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u002&size=128'
+    ),
+    (
+      'u003',
+      '夜猫设计师',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u003&size=128'
+    ),
+    (
+      'u004',
+      '像素画家',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u004&size=128'
+    ),
+    (
+      'u005',
+      '晨光摄影师',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u005&size=128'
+    ),
+    (
+      'u006',
+      'AI 探索者',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u006&size=128'
+    ),
+    (
+      'u007',
+      '极光追逐者',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u007&size=128'
+    ),
+    (
+      'u008',
+      '数字游民',
+      'https://api.dicebear.com/7.x/avataaars/png?seed=starpath_u008&size=128'
+    ),
   ];
 
   const gradients = [

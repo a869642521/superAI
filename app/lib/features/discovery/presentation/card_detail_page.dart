@@ -10,6 +10,7 @@ import 'package:starpath/features/discovery/data/content_providers.dart';
 import 'package:starpath/features/discovery/data/discovery_demo_content.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/discovery/widgets/user_avatar.dart';
+import 'package:starpath/features/profile/presentation/profile_navigation.dart';
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
@@ -582,17 +583,23 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
       data: (comments) {
         if (comments.isEmpty) {
           return SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text(
-                  '还没有评论，来抢沙发吧',
-                  style: const TextStyle(
-                    color: StarpathColors.onSurfaceVariant,
-                    fontSize: 13,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                headerRow(0),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 28),
+                  child: Center(
+                    child: Text(
+                      '还没有评论，来抢沙发吧',
+                      style: TextStyle(
+                        color: StarpathColors.onSurfaceVariant,
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
           );
         }
@@ -863,20 +870,28 @@ class _DetailTopBar extends StatelessWidget {
               user: user,
               size: 36,
               useRandomAvatar: true,
+              onTap: () => openUserProfileView(context, user.id),
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              user.nickname,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: StarpathColors.onSurface,
-                letterSpacing: -0.25,
-                height: 1.2,
+            child: InkWell(
+              onTap: () => openUserProfileView(context, user.id),
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  user.nickname,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: StarpathColors.onSurface,
+                    letterSpacing: -0.25,
+                    height: 1.2,
+                  ),
+                ),
               ),
             ),
           ),
@@ -1153,7 +1168,11 @@ class _CommentTileState extends State<_CommentTile> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(user: comment.user, size: 32),
+        UserAvatar(
+          user: comment.user,
+          size: 32,
+          onTap: () => openUserProfileView(context, comment.user.id),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -1165,14 +1184,22 @@ class _CommentTileState extends State<_CommentTile> {
                     child: Row(
                       children: [
                         Flexible(
-                          child: Text(
-                            comment.user.nickname,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: StarpathColors.onSurface,
+                          child: InkWell(
+                            onTap: () =>
+                                openUserProfileView(context, comment.user.id),
+                            borderRadius: BorderRadius.circular(6),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Text(
+                                comment.user.nickname,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: StarpathColors.onSurface,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         if (comment.isAuthorReply) ...[
@@ -1275,7 +1302,11 @@ class _NestedReplyTileState extends State<_NestedReplyTile> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        UserAvatar(user: comment.user, size: 26),
+        UserAvatar(
+          user: comment.user,
+          size: 26,
+          onTap: () => openUserProfileView(context, comment.user.id),
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: Column(
@@ -1284,14 +1315,22 @@ class _NestedReplyTileState extends State<_NestedReplyTile> {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      comment.user.nickname,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: StarpathColors.onSurface,
+                    child: InkWell(
+                      onTap: () =>
+                          openUserProfileView(context, comment.user.id),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(
+                          comment.user.nickname,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: StarpathColors.onSurface,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   const SizedBox(width: 8),

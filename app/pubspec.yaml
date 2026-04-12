@@ -45,6 +45,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_fonts: ^6.3.2
   speech_to_text: ^7.3.0
+  flutter_tts: ^4.2.3
   video_player: ^2.10.1
 
 dev_dependencies:
@@ -61,3 +62,6 @@ flutter:
     - images/
     - images/png/
     - video/
+    - video/ip0/
+    - video/ip1/
+    - video/ip2/

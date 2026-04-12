@@ -1,13 +1,12 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/theme.dart';
+import 'package:starpath/features/chat/data/main_partner_provider.dart';
 
-/// 中间凸起按钮跳转的默认 AI 伙伴 ID
-const _kDefaultAgentId = 'preview-1';
-
-class MainScaffold extends StatelessWidget {
+class MainScaffold extends ConsumerWidget {
   final StatefulNavigationShell navigationShell;
   const MainScaffold({super.key, required this.navigationShell});
 
@@ -24,7 +23,8 @@ class MainScaffold extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mainPartner = ref.watch(mainPartnerProvider);
     final selectedIndex = navigationShell.currentIndex;
 
     return Scaffold(
@@ -32,7 +32,7 @@ class MainScaffold extends StatelessWidget {
       extendBody: true,
       body: navigationShell,
       bottomNavigationBar: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
         child: SizedBox(
           height: 68,
           child: Stack(
@@ -119,7 +119,7 @@ class MainScaffold extends StatelessWidget {
                   child: _AiCenterButton(
                     onTap: () {
                       HapticFeedback.mediumImpact();
-                      context.push('/chat/agent/$_kDefaultAgentId');
+                      context.push(mainPartner.chatUri);
                     },
                   ),
                 ),

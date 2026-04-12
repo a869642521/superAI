@@ -17,12 +17,16 @@ class UserAvatar extends StatelessWidget {
   /// 圆角比例（相对于 size）。0 = 正圆，0.30 ≈ 参考图圆角方块。
   final double cornerRatio;
 
+  /// 例如跳转个人主页；为 null 时不包裹点击区域。
+  final VoidCallback? onTap;
+
   const UserAvatar({
     super.key,
     required this.user,
     this.size = 24,
     this.useRandomAvatar = false,
     this.cornerRatio = 0.30,
+    this.onTap,
   });
 
   // 9 种发色，与 avatarAccents 色板互补，让头像更缤纷
@@ -63,10 +67,10 @@ class UserAvatar extends StatelessWidget {
     final url = _networkUrl;
     final radius = BorderRadius.circular(size * cornerRatio);
 
+    late final Widget avatar;
     if (!useRandomAvatar) {
-      // 普通模式：圆形
       if (url != null) {
-        return ClipOval(
+        avatar = ClipOval(
           child: CachedNetworkImage(
             imageUrl: url,
             width: size,
@@ -75,27 +79,50 @@ class UserAvatar extends StatelessWidget {
             errorWidget: (_, __, ___) => _placeholder(isCircle: true),
           ),
         );
+      } else {
+        avatar = _placeholder(isCircle: true);
       }
-      return _placeholder(isCircle: true);
+    } else {
+      avatar = Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: _accent,
+          borderRadius: radius,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: CachedNetworkImage(
+            imageUrl: url!,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorWidget: (_, __, ___) => _placeholder(isCircle: false),
+          ),
+        ),
+      );
     }
 
-    // 随机头像模式：圆角方块 + 纯色底 + 3D 人物
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: _accent,
-        borderRadius: radius,
-      ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: CachedNetworkImage(
-          imageUrl: url!,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-          errorWidget: (_, __, ___) => _placeholder(isCircle: false),
+    final cb = onTap;
+    if (cb == null) return avatar;
+
+    if (!useRandomAvatar) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: cb,
+          customBorder: const CircleBorder(),
+          child: avatar,
         ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: cb,
+        borderRadius: radius,
+        child: avatar,
       ),
     );
   }

@@ -67,6 +67,17 @@ class StarpathColors {
     end: Alignment.bottomRight,
   );
 
+  /// 主行动按钮（如「前往聊天」）：亮蓝 → 靛紫 → 电紫
+  static const LinearGradient blueVioletCtaGradient = LinearGradient(
+    colors: [
+      Color(0xFF4D96FF),
+      Color(0xFF6366F1),
+      Color(0xFF9B72FF),
+    ],
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+  );
+
   static const LinearGradient currencyGradient = LinearGradient(
     colors: [tertiary, Color(0xFFF0A840)],
     begin: Alignment.topLeft,

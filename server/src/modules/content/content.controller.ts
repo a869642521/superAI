@@ -67,6 +67,14 @@ export class ContentController {
     return this.contentService.getUserCards(userId);
   }
 
+  @Get('user/:userId')
+  async getUserPublishedCards(
+    @Param('userId') userId: string,
+    @Headers('x-user-id') viewerId?: string,
+  ) {
+    return this.contentService.getPublishedCardsByUser(userId, viewerId);
+  }
+
   @Get(':id')
   async getCardById(
     @Param('id') id: string,

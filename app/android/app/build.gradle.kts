@@ -42,3 +42,10 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 火山引擎 SpeechEngine Dialog SDK（端到端实时语音大模型）
+    // 获取 AppId/Token 后取消注释以启用
+    // implementation("com.bytedance.speechengine:speechengine_tob:0.0.14.3-bugfix")
+    // implementation("com.squareup.okhttp3:okhttp:4.9.1")
+}

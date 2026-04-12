@@ -200,12 +200,62 @@ export class ContentService {
   }
 
   async getUserCards(userId: string) {
-    return this.prisma.contentCard.findMany({
+    const cards = await this.prisma.contentCard.findMany({
       where: { userId, deletedAt: null },
       include: {
-        agent: { select: { id: true, name: true, emoji: true } },
+        user: { select: { id: true, nickname: true, avatarUrl: true } },
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            emoji: true,
+            gradientStart: true,
+            gradientEnd: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
+    return cards.map((card) => ({ ...card, isLiked: false }));
+  }
+
+  /** 某用户已发布的卡片（个人主页展示）；可选当前浏览者用于解析 isLiked。 */
+  async getPublishedCardsByUser(cardAuthorId: string, viewerId?: string) {
+    const cards = await this.prisma.contentCard.findMany({
+      where: {
+        userId: cardAuthorId,
+        isPublished: true,
+        deletedAt: null,
+      },
+      include: {
+        user: { select: { id: true, nickname: true, avatarUrl: true } },
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            emoji: true,
+            gradientStart: true,
+            gradientEnd: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 60,
+    });
+
+    let likedCardIds = new Set<string>();
+    if (viewerId && cards.length > 0) {
+      const cardIds = cards.map((c) => c.id);
+      const likes = await this.prisma.like.findMany({
+        where: { userId: viewerId, cardId: { in: cardIds } },
+        select: { cardId: true },
+      });
+      likedCardIds = new Set(likes.map((l) => l.cardId));
+    }
+
+    return cards.map((card) => ({
+      ...card,
+      isLiked: likedCardIds.has(card.id),
+    }));
   }
 }

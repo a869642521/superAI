@@ -14,6 +14,8 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        // 火山引擎 Maven 仓库（SpeechEngine SDK）
+        maven { url = uri("https://artifact.bytedance.com/repository/Volcengine/") }
     }
 }
 

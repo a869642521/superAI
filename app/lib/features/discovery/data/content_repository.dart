@@ -113,6 +113,36 @@ class ContentRepository {
     return CommentModel.fromJson(data as Map<String, dynamic>);
   }
 
+  /// 某用户已发布的公开卡片（个人主页），失败时返回空列表。
+  Future<List<ContentCardModel>> getUserPublishedCards(String userId) async {
+    try {
+      final response = await _api.dio.get('/cards/user/$userId');
+      final raw = response.data;
+      final data = (raw is Map && raw['data'] != null) ? raw['data'] : raw;
+      if (data is! List) return [];
+      return data
+          .map((e) => ContentCardModel.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// 当前登录用户（`x-user-id`）发布的卡片，失败时返回空列表。
+  Future<List<ContentCardModel>> getMyCards() async {
+    try {
+      final response = await _api.dio.get('/cards/mine');
+      final raw = response.data;
+      final data = (raw is Map && raw['data'] != null) ? raw['data'] : raw;
+      if (data is! List) return [];
+      return data
+          .map((e) => ContentCardModel.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<ContentCardModel> createCard({
     required String type,
     required String title,

@@ -42,7 +42,7 @@ final filteredUserDmThreadsProvider = Provider<List<UserDmThread>>((ref) {
 });
 
 class UserDmNotifier extends Notifier<UserDmState> {
-  static final _uuid = Uuid();
+  static const _uuid = Uuid();
 
   @override
   UserDmState build() => UserDmState.initial();

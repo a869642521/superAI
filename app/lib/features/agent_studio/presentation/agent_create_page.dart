@@ -130,8 +130,8 @@ class _AgentCreatePageState extends ConsumerState<AgentCreatePage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('创建失败，请确认后端服务正在运行'),
+          const SnackBar(
+            content: Text('创建失败，请确认后端服务正在运行'),
             backgroundColor: StarpathColors.error,
           ),
         );
@@ -251,7 +251,7 @@ class _AgentCreatePageState extends ConsumerState<AgentCreatePage> {
                 const SizedBox(height: 4),
                 Text(
                   t.bio,
-                  style: TextStyle(
+                  style: const TextStyle(
                       fontSize: 12, color: StarpathColors.textTertiary),
                   textAlign: TextAlign.center,
                   maxLines: 1,

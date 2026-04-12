@@ -16,7 +16,10 @@ import 'package:starpath/features/discovery/presentation/discovery_page.dart';
 import 'package:starpath/features/discovery/presentation/card_detail_page.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/creation/presentation/create_card_page.dart';
+import 'package:starpath/features/profile/presentation/edit_profile_page.dart';
 import 'package:starpath/features/profile/presentation/profile_page.dart';
+import 'package:starpath/features/profile/presentation/settings_page.dart';
+import 'package:starpath/features/profile/presentation/user_profile_view_page.dart';
 import 'package:starpath/features/profile/presentation/wallet_page.dart';
 import 'package:starpath/shared/widgets/animated_navigation_shell_body.dart';
 import 'package:starpath/shared/widgets/main_scaffold.dart';
@@ -161,14 +164,36 @@ GoRouter createRouter(WidgetRef ref) {
         path: '/chat/agent/:agentId',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) {
-          final agentId = state.pathParameters['agentId']!;
-          return ChatDetailPage(agentId: agentId);
+          final agentId     = state.pathParameters['agentId']!;
+          final agentName   = state.uri.queryParameters['agentName'];
+          final helloVideo  = state.uri.queryParameters['helloVideo'];
+          final haitVideo   = state.uri.queryParameters['haitVideo'];
+          final breatheVideo = state.uri.queryParameters['breatheVideo'];
+          final downVideo   = state.uri.queryParameters['downVideo'];
+          return ChatDetailPage(
+            agentId:      agentId,
+            agentName:    agentName,
+            helloVideo:   helloVideo,
+            haitVideo:    haitVideo,
+            breatheVideo: breatheVideo,
+            downVideo:    downVideo,
+          );
         },
       ),
       GoRoute(
         path: '/wallet',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const WalletPage(),
+      ),
+      GoRoute(
+        path: '/profile/edit',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const EditProfilePage(),
+      ),
+      GoRoute(
+        path: '/settings',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const SettingsPage(),
       ),
       GoRoute(
         path: '/cards/:cardId',
@@ -180,6 +205,14 @@ GoRouter createRouter(WidgetRef ref) {
             cardId: id,
             initialCard: extra is ContentCardModel ? extra : null,
           );
+        },
+      ),
+      GoRoute(
+        path: '/u/:userId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final id = state.pathParameters['userId']!;
+          return UserProfileViewPage(userId: id);
         },
       ),
     ],

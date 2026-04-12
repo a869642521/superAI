@@ -168,8 +168,8 @@ class _DmComposerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final barBg = StarpathColors.surfaceContainerHighest;
-    final iconMuted = StarpathColors.onSurfaceVariant;
+    const barBg = StarpathColors.surfaceContainerHighest;
+    const iconMuted = StarpathColors.onSurfaceVariant;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(6, 6, 8, 6),
@@ -200,7 +200,7 @@ class _DmComposerBar extends StatelessWidget {
                 color: StarpathColors.onSurface,
               ),
               cursorColor: StarpathColors.primary,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 isDense: true,
                 filled: false,
                 border: InputBorder.none,
@@ -210,7 +210,7 @@ class _DmComposerBar extends StatelessWidget {
                   color: StarpathColors.textTertiary,
                   height: 1.35,
                 ),
-                contentPadding: const EdgeInsets.fromLTRB(4, 10, 8, 10),
+                contentPadding: EdgeInsets.fromLTRB(4, 10, 8, 10),
               ),
             ),
           ),

@@ -10,6 +10,7 @@ import 'package:starpath/features/discovery/data/discovery_demo_content.dart';
 import 'package:starpath/features/discovery/domain/card_model.dart';
 import 'package:starpath/features/discovery/widgets/user_avatar.dart';
 import 'package:starpath/features/discovery/presentation/nearby_globe_page.dart';
+import 'package:starpath/features/profile/presentation/profile_navigation.dart';
 
 // ── Entry Point ───────────────────────────────────────────────────────────────
 
@@ -580,23 +581,33 @@ class _FeedCardState extends State<_FeedCard> {
       padding: const EdgeInsets.fromLTRB(8, 7, 8, 9),
       child: Row(
         children: [
-          Hero(
-            tag: 'card-author-${card.id}',
-            child: UserAvatar(
-              user: card.user,
-              size: 20,
-              useRandomAvatar: true,
-            ),
-          ),
-          const SizedBox(width: 5),
           Expanded(
-            child: Text(
-              card.user.nickname,
-              style: const TextStyle(
-                fontSize: 11,
-                color: StarpathColors.onSurfaceVariant,
+            child: GestureDetector(
+              onTap: () => openUserProfileView(context, card.user.id),
+              behavior: HitTestBehavior.opaque,
+              child: Row(
+                children: [
+                  Hero(
+                    tag: 'card-author-${card.id}',
+                    child: UserAvatar(
+                      user: card.user,
+                      size: 20,
+                      useRandomAvatar: true,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      card.user.nickname,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: StarpathColors.onSurfaceVariant,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
-              overflow: TextOverflow.ellipsis,
             ),
           ),
           // Gradient heart when liked, plain when not
