@@ -38,4 +38,3 @@ server/.env.prod
 app/.env.tunnel
 app/.env.volc
 app/*.zip
-app/bugreport*.zip
