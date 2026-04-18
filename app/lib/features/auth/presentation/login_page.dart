@@ -27,6 +27,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   Future<void> _login() async {
     final phone = _phoneController.text.trim();
+    // 输入 "1" 直接跳过登录（演示快捷入口）
+    if (phone == '1') {
+      _skipToHome();
+      return;
+    }
     if (phone.length != 11) {
       setState(() => _error = '请输入11位手机号');
       return;

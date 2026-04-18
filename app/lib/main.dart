@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:starpath/core/constants.dart';
 import 'package:starpath/core/router.dart';
 import 'package:starpath/core/theme.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
@@ -46,7 +47,17 @@ class _StarpathAppState extends ConsumerState<StarpathApp> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() => ref.read(authProvider.notifier).init());
+    Future.microtask(() async {
+      await ref.read(authProvider.notifier).init();
+      if (!mounted) return;
+      // Web 预览 / 显式 dart-define 演示模式：未保存 token 时跳过登录
+      if (AppConstants.skipAuthForPreview) {
+        final s = ref.read(authProvider);
+        if (!s.isLoggedIn) {
+          ref.read(authProvider.notifier).skipLoginToHome();
+        }
+      }
+    });
   }
 
   @override

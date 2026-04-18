@@ -8,17 +8,24 @@ router = APIRouter()
 
 _THINK_PREFIX = "\x00think\x00"
 
+# 与网关侧 voicePlain（Markdown 派生）配合：鼓励结构化正文
+_MARKDOWN_STYLE_SUFFIX = (
+    "\n\n【输出格式】请使用 Markdown（标题、列表、引用、代码块）组织内容；"
+    "关键结论用短句表达，便于朗读与阅读。"
+)
+
 
 @router.post("/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """Stream or return chat completion for an agent conversation."""
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    system = request.system_prompt + _MARKDOWN_STYLE_SUFFIX
 
     if request.stream:
         return StreamingResponse(
             _stream_response(
-                request.system_prompt, messages,
+                system, messages,
                 request.temperature, request.max_tokens
             ),
             media_type="text/event-stream",
@@ -33,7 +40,7 @@ async def chat_completions(request: ChatCompletionRequest):
     try:
         result = ""
         async for token in stream_chat_completion(
-            request.system_prompt, messages, request.temperature, request.max_tokens
+            system, messages, request.temperature, request.max_tokens
         ):
             if not token.startswith(_THINK_PREFIX):
                 result += token

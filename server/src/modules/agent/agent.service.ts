@@ -82,7 +82,35 @@ export class AgentService {
       throw new NotFoundException('Agent not found');
     }
 
-    return this.prisma.agent.update({ where: { id }, data });
+    const affectsPrompt =
+      data.name !== undefined ||
+      data.personality !== undefined ||
+      data.bio !== undefined;
+
+    const name = data.name ?? agent.name;
+    const personality = data.personality ?? agent.personality;
+    const bio = data.bio ?? agent.bio;
+
+    let systemPrompt = agent.systemPrompt;
+    if (affectsPrompt) {
+      let baseTemplate = '';
+      if (agent.templateId) {
+        const template = AGENT_TEMPLATES.find((t) => t.id === agent.templateId);
+        if (template) {
+          baseTemplate = template.systemPrompt;
+        }
+      }
+      const personalityText = personality.join('、');
+      systemPrompt = `你是${name}，一个${personalityText}的AI伙伴。${bio}\n\n${baseTemplate}`;
+    }
+
+    return this.prisma.agent.update({
+      where: { id },
+      data: {
+        ...data,
+        ...(affectsPrompt ? { systemPrompt } : {}),
+      },
+    });
   }
 
   async softDelete(id: string, userId: string) {

@@ -71,12 +71,15 @@ class MessageModel extends Equatable {
   final String? id;
   final String role;
   final String content;
+  /// 服务端从 Markdown 派生的朗读/字幕用纯文本（可选）
+  final String? voicePlain;
   final DateTime createdAt;
 
   const MessageModel({
     this.id,
     required this.role,
     required this.content,
+    this.voicePlain,
     required this.createdAt,
   });
 
@@ -85,6 +88,7 @@ class MessageModel extends Equatable {
       id: json['id'] as String?,
       role: json['role'] as String,
       content: json['content'] as String,
+      voicePlain: json['voicePlain'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
   }
@@ -93,5 +97,5 @@ class MessageModel extends Equatable {
   bool get isAssistant => role == 'assistant';
 
   @override
-  List<Object?> get props => [id, content];
+  List<Object?> get props => [id, content, voicePlain];
 }

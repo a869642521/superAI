@@ -9,6 +9,7 @@ import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
 import { CurrencyService } from '../currency/currency.service';
 import { MessageRole } from '@prisma/client';
+import { stripMarkdownForVoice } from './voice-plain.util';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -133,19 +134,81 @@ export class ChatGateway {
         }
       }
 
+      let savedVoicePlain: string | null = null;
       if (fullContent) {
+        savedVoicePlain = stripMarkdownForVoice(fullContent);
+        if (!savedVoicePlain) savedVoicePlain = null;
         await this.chatService.saveMessage(
           realConversationId,
           MessageRole.assistant,
           fullContent,
+          savedVoicePlain,
         );
       }
 
-      client.emit('messageComplete', { conversationId: realConversationId });
+      client.emit('messageComplete', {
+        conversationId: realConversationId,
+        voicePlain: savedVoicePlain,
+      });
     } catch (error) {
       client.emit('error', {
         message: 'AI 服务暂时不可用，请稍后再试',
       });
     }
+  }
+
+  /**
+   * saveTurn：豆包端到端 SDK 每轮结束后，把用户话 + AI 话同步落库。
+   * 不触发 LLM，只做持久化，保证语音对话历史与文字对话共享同一会话线。
+   */
+  @SubscribeMessage('saveTurn')
+  async handleSaveTurn(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      conversationId: string;
+      userId: string;
+      userText: string;
+      assistantText: string;
+    },
+  ) {
+    const { conversationId, userId, userText, assistantText } = data;
+    if (!conversationId || !userText || !assistantText) return;
+
+    let realConversationId = conversationId;
+    try {
+      await this.chatService.getConversationWithAgent(conversationId);
+    } catch {
+      const effectiveUserId = userId || 'anonymous';
+      try {
+        const conv = await this.chatService.createConversation(
+          effectiveUserId,
+          conversationId,
+        );
+        realConversationId = conv.id;
+        client.emit('conversationCreated', {
+          oldId: conversationId,
+          newId: realConversationId,
+        });
+      } catch {
+        return;
+      }
+    }
+
+    await this.chatService.saveMessage(
+      realConversationId,
+      MessageRole.user,
+      userText,
+    );
+
+    const voicePlain = stripMarkdownForVoice(assistantText) || null;
+    await this.chatService.saveMessage(
+      realConversationId,
+      MessageRole.assistant,
+      assistantText,
+      voicePlain,
+    );
+
+    client.emit('turnSaved', { conversationId: realConversationId });
   }
 }

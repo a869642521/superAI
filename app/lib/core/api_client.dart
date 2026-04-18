@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:starpath/core/constants.dart';
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
@@ -9,11 +10,15 @@ class ApiClient {
 
   ApiClient._internal() {
     dio = Dio(BaseOptions(
-      baseUrl: 'http://localhost:3000/api/v1',
+      baseUrl: AppConstants.apiBaseUrl,
       connectTimeout: const Duration(seconds: 6),
       receiveTimeout: const Duration(seconds: 15),
       headers: {'Content-Type': 'application/json'},
     ));
+
+    if (AppConstants.usesNgrokForApi) {
+      dio.options.headers['ngrok-skip-browser-warning'] = 'true';
+    }
 
     // 仅在 debug 模式下输出日志，避免无后端时的噪音
     if (kDebugMode) {

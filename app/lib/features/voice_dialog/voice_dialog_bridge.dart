@@ -52,23 +52,35 @@ class VoiceDialogEvent {
 // ── 配置 ─────────────────────────────────────────────────────────────────────
 
 class VoiceDialogConfig {
-  /// 火山引擎控制台 → 豆包语音 → AppID
+  /// 控制台应用 AppID（必填，见 SDK 文档参数配置章节）
   final String appId;
 
-  /// 火山引擎控制台 → 豆包语音 → Access Token
+  /// 控制台应用 AppKey / Secret Key（必填）
+  final String appKey;
+
+  /// 控制台应用 Access Token（必填）
   final String appToken;
 
   /// 固定值 "volc.speech.dialog"（端到端实时语音大模型）
   final String resourceId;
 
-  /// 使用的大模型（留空则用控制台默认）
-  final String? modelName;
+  /// StartSession 必传 model：O / O2.0 → 1.2.1.1；SC / SC2.0 → 2.2.0.0
+  final String dialogModel;
+
+  /// TTS 发音人（O 系列默认 vv，见文档 1594356）
+  final String ttsSpeaker;
+
+  /// AEC 回声消除：真机扬声器场景开启，戴耳机或模拟器关闭
+  final bool enableAec;
 
   const VoiceDialogConfig({
-    required this.appId,
-    required this.appToken,
+    this.appId = '',
+    this.appKey = '',
+    this.appToken = '',
     this.resourceId = 'volc.speech.dialog',
-    this.modelName,
+    this.dialogModel = '1.2.1.1',
+    this.ttsSpeaker = 'zh_female_vv_jupiter_bigtts',
+    this.enableAec = false,
   });
 }
 
@@ -105,15 +117,30 @@ class VoiceDialogBridge {
     _listenNativeEvents();
     try {
       final result = await _methodChannel.invokeMethod<bool>('startDialog', {
-        'appId':      config.appId,
-        'appToken':   config.appToken,
-        'resourceId': config.resourceId,
-        if (config.modelName != null) 'modelName': config.modelName,
+        'appId':       config.appId,
+        'appKey':      config.appKey,
+        'appToken':    config.appToken,
+        'resourceId':  config.resourceId,
+        'dialogModel': config.dialogModel,
+        'ttsSpeaker':  config.ttsSpeaker,
+        'enableAec':   config.enableAec,
       });
       _started = result == true;
       return _started;
+    } on PlatformException catch (e) {
+      final msg = '${e.code}: ${e.message ?? e.toString()}';
+      debugPrint('[VoiceDialog] startDialog PlatformException: $msg');
+      _controller.add(VoiceDialogEvent(
+        type: VoiceDialogEventType.error,
+        errorMessage: msg,
+      ));
+      return false;
     } catch (e) {
       debugPrint('[VoiceDialog] startDialog error: $e');
+      _controller.add(VoiceDialogEvent(
+        type: VoiceDialogEventType.error,
+        errorMessage: e.toString(),
+      ));
       return false;
     }
   }

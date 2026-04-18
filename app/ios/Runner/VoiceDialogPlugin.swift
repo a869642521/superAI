@@ -2,19 +2,11 @@ import Flutter
 import Foundation
 import AVFoundation
 
-// 火山引擎 iOS SDK（pod install 后自动可用）
+#if canImport(SpeechEngineToB)
 import SpeechEngineToB
 
 /**
  * Flutter ↔ 火山引擎 SpeechEngine Dialog SDK 桥接（iOS）
- *
- * API 基于 SpeechEngineToB 0.0.14.5 头文件实现，主要接口：
- *   - SpeechEngine.prepareEnvironment()
- *   - SpeechEngine().createEngineWithDelegate(self)
- *   - engine.setStringParam / setBoolParam / setIntParam
- *   - engine.initEngine()  （注意：不是 startEngine）
- *   - engine.sendDirective(SEDirective)
- *   - delegate: onMessageWithType(_:andData:)
  */
 class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
@@ -25,7 +17,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var engine: SpeechEngine?
     private var sessionStarted = false
 
-    // ── 注册 ──────────────────────────────────────────────────────────────────
     static func register(with registrar: FlutterPluginRegistrar) {
         let instance = VoiceDialogPlugin()
 
@@ -42,7 +33,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         eventChannel.setStreamHandler(instance)
     }
 
-    // ── MethodChannel ─────────────────────────────────────────────────────────
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "prepareEnvironment":
@@ -62,8 +52,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
     }
 
-    // ── SDK 实现 ──────────────────────────────────────────────────────────────
-
     private func prepareEnvironment(result: FlutterResult) {
         SpeechEngine.prepareEnvironment()
         result(nil)
@@ -77,7 +65,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
         let resourceId = args["resourceId"] as? String ?? "volc.speech.dialog"
 
-        // 请求麦克风权限
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
             guard let self = self else { return }
             guard granted else {
@@ -92,6 +79,9 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
     }
 
+    /// X-Api-App-Key 为端到端实时语音服务固定值（官方文档 1594356），非控制台 Secret Key
+    private static let fixedRealtimeDialogAppKey = "PlgvMymc7f3tQnJ6"
+
     private func initEngine(appId: String, appToken: String, resourceId: String, result: @escaping FlutterResult) {
         engine = SpeechEngine()
         guard engine?.createEngine(with: self) == true else {
@@ -100,19 +90,17 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
 
-        // 必填参数
-        engine?.setStringParam(SE_DIALOG_ENGINE,  forKey: SE_PARAMS_KEY_ENGINE_NAME_STRING)
-        engine?.setStringParam(appId,             forKey: SE_PARAMS_KEY_APP_ID_STRING)
-        engine?.setStringParam(appToken,          forKey: SE_PARAMS_KEY_APP_TOKEN_STRING)
-        engine?.setStringParam(resourceId,        forKey: SE_PARAMS_KEY_RESOURCE_ID_STRING)
+        engine?.setStringParam(SE_DIALOG_ENGINE,                       forKey: SE_PARAMS_KEY_ENGINE_NAME_STRING)
+        engine?.setStringParam(appId,                                  forKey: SE_PARAMS_KEY_APP_ID_STRING)
+        engine?.setStringParam(VoiceDialogPlugin.fixedRealtimeDialogAppKey, forKey: SE_PARAMS_KEY_APP_KEY_STRING)
+        engine?.setStringParam(appToken,                               forKey: SE_PARAMS_KEY_APP_TOKEN_STRING)
+        engine?.setStringParam(resourceId,                             forKey: SE_PARAMS_KEY_RESOURCE_ID_STRING)
 
-        // AEC 回声消除（将 SDK 中的 aec_model 文件添加到 Xcode Copy Bundle Resources）
         if let modelPath = Bundle.main.path(forResource: "aec_model", ofType: nil) {
             engine?.setBoolParam(true, forKey: SE_PARAMS_KEY_ENABLE_AEC_BOOL)
             engine?.setStringParam(modelPath, forKey: SE_PARAMS_KEY_AEC_MODEL_PATH_STRING)
         }
 
-        // initEngine 返回 0 表示成功
         let code = engine?.initEngine() ?? SENoError
         guard code == SENoError else {
             engine?.destroy()
@@ -121,7 +109,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
 
-        // 建立 WebSocket 连接
         engine?.send(SEDirectiveEventStartConnection)
         result(true)
     }
@@ -144,7 +131,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         result(nil)
     }
 
-    // ── EventChannel StreamHandler ────────────────────────────────────────────
     func onListen(withArguments arguments: Any?,
                   eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         eventSink = events
@@ -161,7 +147,6 @@ class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 }
 
-// ── SpeechEngineDelegate（SDK 原始消息回调）──────────────────────────────────
 extension VoiceDialogPlugin: SpeechEngineDelegate {
 
     func onMessage(with type: SEMessageType, andData data: Data) {
@@ -170,9 +155,7 @@ extension VoiceDialogPlugin: SpeechEngineDelegate {
         }
 
         switch type {
-        // 连接事件
         case SEEventConnectionStarted:
-            // 连接成功后自动开启会话
             engine?.send(SEDirectiveEventStartSession)
             sessionStarted = true
             pushEvent(["type": "connected"])
@@ -184,34 +167,29 @@ extension VoiceDialogPlugin: SpeechEngineDelegate {
         case SEEventConnectionFinished:
             pushEvent(["type": "disconnected"])
 
-        // ASR（语音识别）
         case SEEventASRInfo:
-            // 实时部分结果
             let text = json["text"] as? String ?? ""
             if !text.isEmpty {
                 pushEvent(["type": "userSpeaking", "text": text])
             }
 
         case SEEventASRResponse:
-            // 最终识别结果
             let text = json["text"] as? String ?? ""
             if !text.isEmpty {
                 pushEvent(["type": "userFinalText", "text": text])
             }
 
         case SEEventASREnded:
-            break // ASR 结束，无需额外事件
+            break
 
-        // LLM（大模型文本流）
         case SEEventChatResponse:
             if let delta = json["text"] as? String, !delta.isEmpty {
                 pushEvent(["type": "aiTextDelta", "text": delta])
             }
 
         case SEEventChatEnded:
-            break // TTS 结束时一并发 aiRoundDone
+            break
 
-        // TTS（语音合成播放）
         case SEEventTTSSentenceStart:
             pushEvent(["type": "aiSpeaking"])
 
@@ -221,7 +199,6 @@ extension VoiceDialogPlugin: SpeechEngineDelegate {
         case SEEventTTSEnded:
             pushEvent(["type": "aiRoundDone"])
 
-        // 会话事件
         case SEEventSessionStarted:
             break
 
@@ -235,7 +212,6 @@ extension VoiceDialogPlugin: SpeechEngineDelegate {
         case SEEventSessionCanceled:
             break
 
-        // 错误
         case SEEngineError:
             let err = json["message"] as? String ?? "Unknown engine error"
             pushEvent(["type": "error", "error": err])
@@ -245,3 +221,58 @@ extension VoiceDialogPlugin: SpeechEngineDelegate {
         }
     }
 }
+
+#else
+
+/// 未链接 SpeechEngineToB 时（例如模拟器 Pod 跳过）的占位实现。
+class VoiceDialogPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+
+    static let methodChannelName = "com.starpath/voice_dialog"
+    static let eventChannelName  = "com.starpath/voice_dialog_events"
+
+    private var eventSink: FlutterEventSink?
+
+    static func register(with registrar: FlutterPluginRegistrar) {
+        let instance = VoiceDialogPlugin()
+        let methodChannel = FlutterMethodChannel(
+            name: methodChannelName,
+            binaryMessenger: registrar.messenger()
+        )
+        registrar.addMethodCallDelegate(instance, channel: methodChannel)
+        let eventChannel = FlutterEventChannel(
+            name: eventChannelName,
+            binaryMessenger: registrar.messenger()
+        )
+        eventChannel.setStreamHandler(instance)
+    }
+
+    func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        switch call.method {
+        case "prepareEnvironment":
+            result(nil)
+        case "startDialog":
+            result(FlutterError(
+                code: "NO_NATIVE_SDK",
+                message: "火山语音 SDK 未集成（模拟器开发模式）。真机请删除 ios/.skip_volc_for_sim 后执行 pod install。",
+                details: nil
+            ))
+        case "stopDialog", "interrupt":
+            result(nil)
+        default:
+            result(FlutterMethodNotImplemented)
+        }
+    }
+
+    func onListen(withArguments arguments: Any?,
+                  eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        eventSink = events
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        eventSink = nil
+        return nil
+    }
+}
+
+#endif

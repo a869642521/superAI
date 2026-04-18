@@ -72,6 +72,8 @@ model Message {
   conversationId String
   role           MessageRole
   content        String
+  /// 面向 TTS / 语音区字幕的纯文本（可由网关从 Markdown 派生）
+  voicePlain     String?
   createdAt      DateTime @default(now())
 
   conversation   Conversation @relation(fields: [conversationId], references: [id])

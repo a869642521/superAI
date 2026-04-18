@@ -14,7 +14,7 @@
 | Android Gradle 依赖 | ✅ 已启用 |
 | iOS Podfile | ✅ 已启用（需 pod install） |
 | AEC 模型文件 | ⬜ 需手动复制（见下方步骤 2） |
-| `_useVolcSdk` 开关 | ⬜ 需改为 true（见下方步骤 3） |
+| 端到端 SDK 开关 | 需同时 `--dart-define=VOLC_VOICE_SDK=true` 与 `VOLC_E2E_VOICE=true`（见步骤 3；默认统一大脑不启用端到端以免与落库分叉） |
 
 ---
 
@@ -57,16 +57,19 @@ app/android/app/src/main/assets/aec/
 
 ### 步骤 3：开启 SDK 开关并注入密钥
 
-在 `chat_detail_page.dart` 里，`_useVolcSdk` 已经通过 `--dart-define` 控制，**密钥不写入代码**。
+在 `chat_detail_page.dart` 里，端到端 SDK 需 **同时** 开启 `VOLC_VOICE_SDK` 与 `VOLC_E2E_VOICE`；仅前者时仍会走系统 STT + 网关 LLM + TTS（统一大脑、会话落库）。**密钥不写入代码**。
 
 运行命令（把 `YOUR_APP_ID` 和 `YOUR_TOKEN` 替换为控制台的真实值）：
 
 ```bash
 cd app && flutter run \
   --dart-define=VOLC_VOICE_SDK=true \
+  --dart-define=VOLC_E2E_VOICE=true \
   --dart-define=VOLC_APP_ID=YOUR_APP_ID \
   --dart-define=VOLC_APP_TOKEN=YOUR_TOKEN
 ```
+
+真机脚本 `app/ios-device.sh` 默认会带上 `VOLC_E2E_VOICE=true`，与「豆包端到端」演示一致。
 
 ---
 

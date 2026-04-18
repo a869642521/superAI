@@ -391,22 +391,31 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage>
       return const SliverFillRemaining(child: _EmptyView());
     }
 
-    return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
-      sliver: SliverMasonryGrid.count(
-        crossAxisCount: 2,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        itemBuilder: (context, index) => _FeedCard(
-          card: state.items[index],
-          index: index,
-          onTap: () => context.push(
-            '/cards/${state.items[index].id}',
-            extra: state.items[index],
+    // LayoutBuilder 保护：视口宽度为 0（Tab 切换动画中 offstage 分支）时
+    // SliverMasonryGrid 会算出负数 crossAxisExtent 导致断言，直接返回空占位。
+    return SliverLayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.crossAxisExtent <= 0) {
+          return const SliverToBoxAdapter(child: SizedBox.shrink());
+        }
+        return SliverPadding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+          sliver: SliverMasonryGrid.count(
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            itemBuilder: (context, index) => _FeedCard(
+              card: state.items[index],
+              index: index,
+              onTap: () => context.push(
+                '/cards/${state.items[index].id}',
+                extra: state.items[index],
+              ),
+            ),
+            childCount: state.items.length,
           ),
-        ),
-        childCount: state.items.length,
-      ),
+        );
+      },
     );
   }
 
@@ -509,16 +518,19 @@ class _FeedCardState extends State<_FeedCard> {
           aspectRatio: coverAspectRatioForCard(c),
           child: Hero(
             tag: 'card-cover-${c.id}',
-            child: CachedNetworkImage(
-              imageUrl: url,
-              imageBuilder: (ctx, img) => Image(
-                image: img,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
+            // SizedBox.expand 确保 Hero 在导航过渡时始终有有限尺寸
+            child: SizedBox.expand(
+              child: CachedNetworkImage(
+                imageUrl: url,
+                imageBuilder: (ctx, img) => Image(
+                  image: img,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity,
+                ),
+                placeholder: (ctx, u) => _gradientPlaceholder(),
+                errorWidget: (ctx, u, err) => _gradientPlaceholder(),
               ),
-              placeholder: (ctx, u) => _gradientPlaceholder(),
-              errorWidget: (ctx, u, err) => _gradientPlaceholder(),
             ),
           ),
         ),

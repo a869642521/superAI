@@ -1,14 +1,22 @@
 package com.example.starpath
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-// 火山引擎 SpeechEngine SDK（依赖在 build.gradle.kts 中启用）
 import com.bytedance.speech.speechengine.SpeechEngine
 import com.bytedance.speech.speechengine.SpeechEngineDefines
 import com.bytedance.speech.speechengine.SpeechEngineGenerator
@@ -16,18 +24,23 @@ import com.bytedance.speech.speechengine.SpeechEngineGenerator
 /**
  * Flutter ↔ 火山引擎 SpeechEngine Dialog SDK 桥接（Android）
  *
- * API 基于官方文档 https://www.volcengine.com/docs/6561/1597643 实现：
- *  - SpeechEngineGenerator.PrepareEnvironment(context, application)
- *  - engine = SpeechEngineGenerator.getInstance(); engine.createEngine()
- *  - engine.setOptionString / setOptionBoolean / setOptionInt
- *  - engine.initEngine()  ->  engine.setContext / setListener
- *  - engine.sendDirective(DIRECTIVE_START_ENGINE, json)  启动
- *  - engine.sendDirective(DIRECTIVE_SYNC_STOP_ENGINE, "")  停止
- *  - engine.destroyEngine()
- *  - 消息回调接口: onSpeechMessage(type: Int, data: ByteArray, len: Int)
+ * 官方文档: https://www.volcengine.com/docs/6561/1597643
+ *
+ * 正确调用顺序（通过 .class 反编译 SpeechEngineDefines 确认）：
+ *   1. PrepareEnvironment
+ *   2. getInstance / createEngine / setOption* / setContext / setListener / initEngine
+ *   3. sendDirective(DIRECTIVE_DIALOG_START_CONNECTION, "")   ← 建立 WebSocket
+ *   4. 回调 MESSAGE_TYPE_DIALOG_CONNECTION_STARTED
+ *      → sendDirective(DIRECTIVE_DIALOG_START_SESSION, sessionJson)  ← 启动会话
+ *   5. 回调 MESSAGE_TYPE_DIALOG_SESSION_STARTED → 推送 "connected"
+ *
+ * 错误 -700 (ERR_SEND_DIRECTIVE_IN_WRONG_STATE) 原因：
+ *   旧代码误用了 DIRECTIVE_START_ENGINE（通用引擎指令），
+ *   Dialog SDK 需要使用 DIRECTIVE_DIALOG_START_CONNECTION。
  */
 class VoiceDialogPlugin(
     private val context: Context,
+    private val activity: Activity?,
     messenger: BinaryMessenger,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
@@ -35,16 +48,30 @@ class VoiceDialogPlugin(
         private const val METHOD_CHANNEL = "com.starpath/voice_dialog"
         private const val EVENT_CHANNEL  = "com.starpath/voice_dialog_events"
 
-        // Dialog 服务地址（官方文档固定值）
         private const val DIALOG_ADDRESS = "wss://openspeech.bytedance.com"
         private const val DIALOG_URI     = "/api/v3/realtime/dialogue"
+
+        private const val TAG = "VoiceDialogPlugin"
+
+        /** X-Api-App-Key 固定值（官方文档 1594356，非控制台 Secret Key） */
+        private const val FIXED_APP_KEY = "PlgvMymc7f3tQnJ6"
+
+        private const val REQUEST_RECORD_AUDIO = 7001
     }
+
+    private var pendingStartArgs:   MethodCall?            = null
+    private var pendingStartResult: MethodChannel.Result?  = null
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
     private val eventChannel  = EventChannel(messenger, EVENT_CHANNEL)
     private var eventSink: EventChannel.EventSink? = null
     private var engine: SpeechEngine? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var aiSpeakingEmitted = false
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -75,63 +102,112 @@ class VoiceDialogPlugin(
         }
     }
 
+    /** MainActivity.onRequestPermissionsResult → 转发到此处 */
+    fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        if (requestCode != REQUEST_RECORD_AUDIO) return
+        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        val call   = pendingStartArgs   ?: return
+        val result = pendingStartResult ?: return
+        pendingStartArgs   = null
+        pendingStartResult = null
+        if (granted) doStartDialog(call, result)
+        else result.error("MIC_DENIED", "麦克风权限被拒绝，无法启动语音对话", null)
+    }
+
     private fun handleStartDialog(call: MethodCall, result: MethodChannel.Result) {
-        val appId      = call.argument<String>("appId")      ?: return result.error("MISSING_PARAM", "appId required", null)
-        val appToken   = call.argument<String>("appToken")   ?: return result.error("MISSING_PARAM", "appToken required", null)
-        val resourceId = call.argument<String>("resourceId") ?: SpeechEngineDefines.PARAMS_KEY_RESOURCE_ID_STRING
+        val appId    = call.argument<String>("appId")    ?: ""
+        val appToken = call.argument<String>("appToken") ?: ""
+        if (appId.isEmpty() || appToken.isEmpty()) {
+            return result.error("MISSING_PARAM", "appId 和 appToken 不能为空", null)
+        }
+
+        val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!hasMic) {
+            if (activity != null) {
+                pendingStartArgs   = call
+                pendingStartResult = result
+                ActivityCompat.requestPermissions(
+                    activity, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO,
+                )
+            } else {
+                result.error("MIC_DENIED", "无法请求麦克风权限（activity 为 null）", null)
+            }
+            return
+        }
+        doStartDialog(call, result)
+    }
+
+    private fun doStartDialog(call: MethodCall, result: MethodChannel.Result) {
+        val appId       = call.argument<String>("appId")       ?: ""
+        val appToken    = call.argument<String>("appToken")    ?: ""
+        val resourceId  = call.argument<String>("resourceId")  ?: "volc.speech.dialog"
+        val dialogModel = call.argument<String>("dialogModel") ?: "1.2.1.1"
+        val ttsSpeaker  = call.argument<String>("ttsSpeaker")  ?: "zh_female_vv_jupiter_bigtts"
+        val enableAec   = call.argument<Boolean>("enableAec")  ?: false
+
+        android.util.Log.i(TAG, "doStartDialog appId=$appId resourceId=$resourceId model=$dialogModel")
 
         try {
-            // 创建引擎实例（官方文档：getInstance() 获取生成器，createEngine() 创建实例）
+            requestAudioFocus()
+
+            // 已有引擎先销毁
+            engine?.let {
+                try { it.sendDirective(SpeechEngineDefines.DIRECTIVE_SYNC_STOP_ENGINE, "") } catch (_: Exception) {}
+                try { it.destroyEngine() } catch (_: Exception) {}
+                engine = null
+            }
+
             engine = SpeechEngineGenerator.getInstance()
             engine!!.createEngine()
 
-            // 必填参数
+            // ── 必填参数 ────────────────────────────────────────────────────
             engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_ENGINE_NAME_STRING, SpeechEngineDefines.DIALOG_ENGINE)
             engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_APP_ID_STRING,      appId)
+            engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_APP_KEY_STRING,     FIXED_APP_KEY)
             engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_APP_TOKEN_STRING,   appToken)
             engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_RESOURCE_ID_STRING, resourceId)
+            engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_UID_STRING,         "starpath-user")
             engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_DIALOG_ADDRESS_STRING, DIALOG_ADDRESS)
-            engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_DIALOG_URI_STRING,  DIALOG_URI)
-            // UID 用于线上定位问题（用固定字符串即可）
-            engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_UID_STRING, "starpath-user")
+            engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_DIALOG_URI_STRING,     DIALOG_URI)
 
-            // AEC 回声消除（将 SDK 包内 aec.model 文件放到 assets/aec/aec.model）
-            val aecPath = copyAecModelToFilesDir()
-            if (aecPath != null) {
-                engine!!.setOptionBoolean(SpeechEngineDefines.PARAMS_KEY_ENABLE_AEC_BOOL, true)
-                engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_AEC_MODEL_PATH_STRING, aecPath)
+            // AEC
+            if (enableAec) {
+                val aecPath = copyAecModelToFilesDir()
+                if (aecPath != null) {
+                    engine!!.setOptionBoolean(SpeechEngineDefines.PARAMS_KEY_ENABLE_AEC_BOOL, true)
+                    engine!!.setOptionString(SpeechEngineDefines.PARAMS_KEY_AEC_MODEL_PATH_STRING, aecPath)
+                    android.util.Log.i(TAG, "AEC 已启用: $aecPath")
+                }
             }
 
-            // 初始化引擎
-            val ret = engine!!.initEngine()
-            if (ret != SpeechEngineDefines.ERR_NO_ERROR) {
-                engine!!.destroyEngine()
-                engine = null
-                return result.error("INIT_ERROR", "initEngine returned $ret", null)
-            }
-
-            // 设置 context 和消息监听
+            // setContext / setListener 必须在 initEngine 之前（否则早期回调丢失，导致 -700）
             engine!!.setContext(context.applicationContext)
-            engine!!.setListener { type, data, len ->
-                handleSpeechMessage(type, data, len)
+            engine!!.setListener { type, data, len -> handleSpeechMessage(type, data, len) }
+
+            val initRet = engine!!.initEngine()
+            if (initRet != SpeechEngineDefines.ERR_NO_ERROR) {
+                engine!!.destroyEngine(); engine = null
+                return result.error("INIT_ERROR", "initEngine returned $initRet", null)
             }
 
-            // 启动引擎（建立 WebSocket 连接并开始对话）
-            val startRet = engine!!.sendDirective(
-                SpeechEngineDefines.DIRECTIVE_START_ENGINE,
-                "{\"dialog\":{\"bot_name\":\"豆包\"}}",
-            )
+            // 按官方文档：先 SYNC_STOP，再 START_ENGINE（避免内部异步线程问题）
+            engine!!.sendDirective(SpeechEngineDefines.DIRECTIVE_SYNC_STOP_ENGINE, "")
+
+            val startPayload = buildStartEnginePayload(dialogModel, ttsSpeaker)
+            android.util.Log.i(TAG, "START_ENGINE payload=$startPayload")
+            val startRet = engine!!.sendDirective(SpeechEngineDefines.DIRECTIVE_START_ENGINE, startPayload)
+            android.util.Log.i(TAG, "START_ENGINE returned $startRet")
             if (startRet != SpeechEngineDefines.ERR_NO_ERROR) {
-                engine!!.destroyEngine()
-                engine = null
-                return result.error("START_ERROR", "sendDirective(DIRECTIVE_START_ENGINE) returned $startRet", null)
+                engine!!.destroyEngine(); engine = null
+                return result.error("START_ERROR", "sendDirective(START_ENGINE) returned $startRet", null)
             }
 
-            pushEvent(mapOf("type" to "connected"))
+            // connected / error 事件在 MESSAGE_TYPE_ENGINE_START 回调里异步推送
             result.success(true)
 
         } catch (e: Exception) {
-            engine?.destroyEngine()
+            engine?.let { try { it.destroyEngine() } catch (_: Exception) {} }
             engine = null
             result.error("START_ERROR", e.message, null)
         }
@@ -142,7 +218,7 @@ class VoiceDialogPlugin(
             engine?.sendDirective(SpeechEngineDefines.DIRECTIVE_SYNC_STOP_ENGINE, "")
             engine?.destroyEngine()
             engine = null
-            pushEvent(mapOf("type" to "disconnected"))
+            abandonAudioFocus()
             result.success(null)
         } catch (e: Exception) {
             result.error("STOP_ERROR", e.message, null)
@@ -151,107 +227,167 @@ class VoiceDialogPlugin(
 
     private fun handleInterrupt(result: MethodChannel.Result) {
         try {
-            // 打断当前 AI 输出（文档中对应 ClientInterrupt 指令）
             engine?.sendDirective(SpeechEngineDefines.DIRECTIVE_EVENT_CLIENT_INTERRUPT, "")
-            pushEvent(mapOf("type" to "interrupted"))
             result.success(null)
         } catch (e: Exception) {
             result.error("INTERRUPT_ERROR", e.message, null)
         }
     }
 
-    // ── 消息回调处理 ───────────────────────────────────────────────────────────
+    // ── 消息回调 ──────────────────────────────────────────────────────────────
 
     private fun handleSpeechMessage(type: Int, data: ByteArray, len: Int) {
         val strData = String(data, 0, len, Charsets.UTF_8)
+        android.util.Log.d(TAG, "▶ onSpeechMessage type=$type len=$len data=${strData.take(200)}")
         when (type) {
-            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_START  -> {
-                // 引擎启动成功（已在 startDialog 里推送 connected）
+
+            // ── 引擎级（START_ENGINE 模式）────────────────────────────────────
+            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_START -> {
+                android.util.Log.i(TAG, "ENGINE_START: $strData")
+                pushEvent(mapOf("type" to "connected"))
             }
-            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_STOP   -> {
+            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_STOP -> {
+                android.util.Log.i(TAG, "ENGINE_STOP: $strData")
                 pushEvent(mapOf("type" to "disconnected"))
             }
-            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_ERROR  -> {
+            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_ERROR -> {
+                android.util.Log.e(TAG, "ENGINE_ERROR: $strData")
                 pushEvent(mapOf("type" to "error", "error" to strData))
             }
-            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_ASR_INFO     -> {
-                // 用户开始说话 / 实时识别中间结果
-                val text = parseJsonField(strData, "text") ?: ""
-                if (text.isNotEmpty()) {
-                    pushEvent(mapOf("type" to "userSpeaking", "text" to text))
-                }
+
+            // ── ASR ───────────────────────────────────────────────────────────
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_ASR_INFO -> {
+                val text = parseAsrText(strData).ifEmpty { parseJsonField(strData, "text") ?: "" }
+                if (text.isNotEmpty()) pushEvent(mapOf("type" to "userSpeaking", "text" to text))
             }
             SpeechEngineDefines.MESSAGE_TYPE_DIALOG_ASR_RESPONSE -> {
-                // 最终 ASR 识别结果
-                val text = parseJsonField(strData, "text") ?: ""
-                if (text.isNotEmpty()) {
-                    pushEvent(mapOf("type" to "userFinalText", "text" to text))
-                }
+                android.util.Log.i(TAG, "ASR_RESPONSE: $strData")
+                val text = parseAsrText(strData)
+                if (text.isNotEmpty()) pushEvent(mapOf("type" to "userFinalText", "text" to text))
             }
-            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_ASR_ENDED    -> {
-                // ASR 结束，等待 LLM 回复
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_ASR_ENDED -> {
+                android.util.Log.i(TAG, "ASR_ENDED")
+                aiSpeakingEmitted = false
             }
+
+            // ── Chat（LLM 流式） ───────────────────────────────────────────────
             SpeechEngineDefines.MESSAGE_TYPE_DIALOG_CHAT_RESPONSE -> {
-                // LLM 文本流式回调
-                val text = parseJsonField(strData, "text") ?: strData
+                val text = parseJsonField(strData, "content") ?: parseJsonField(strData, "text") ?: ""
+                android.util.Log.d(TAG, "CHAT_RESPONSE text=$text")
                 if (text.isNotEmpty()) {
+                    if (!aiSpeakingEmitted) {
+                        aiSpeakingEmitted = true
+                        pushEvent(mapOf("type" to "aiSpeaking"))
+                    }
                     pushEvent(mapOf("type" to "aiTextDelta", "text" to text))
                 }
             }
-            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_CHAT_ENDED   -> {
-                // LLM 回复结束（TTS 播放也随后结束）
-                pushEvent(mapOf("type" to "aiRoundDone"))
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_CHAT_ENDED -> {
+                android.util.Log.i(TAG, "CHAT_ENDED")
+                aiSpeakingEmitted = false
             }
-            // TTS 相关（不同版本常量名可能不同，用数值做兜底）
-            // MESSAGE_TYPE_DIALOG_TTS_SENTENCE_START = 3008
-            3008 -> pushEvent(mapOf("type" to "aiSpeaking"))
-            // MESSAGE_TYPE_DIALOG_TTS_ENDED = 3011
-            3011 -> pushEvent(mapOf("type" to "aiRoundDone"))
+
+            // ── TTS ───────────────────────────────────────────────────────────
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_TTS_SENTENCE_START -> {
+                if (!aiSpeakingEmitted) {
+                    aiSpeakingEmitted = true
+                    pushEvent(mapOf("type" to "aiSpeaking"))
+                }
+            }
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_TTS_SENTENCE_END -> { /* 单句播完，无需处理 */ }
+            SpeechEngineDefines.MESSAGE_TYPE_DIALOG_TTS_ENDED -> {
+                android.util.Log.i(TAG, "TTS_ENDED")
+                pushEvent(mapOf("type" to "aiRoundDone"))
+                aiSpeakingEmitted = false
+            }
+
+            // ── 通用兜底 ──────────────────────────────────────────────────────
+            SpeechEngineDefines.MESSAGE_TYPE_ENGINE_ERROR -> {
+                android.util.Log.e(TAG, "ENGINE_ERROR: $strData")
+                pushEvent(mapOf("type" to "error", "error" to strData))
+            }
+            else -> {
+                android.util.Log.d(TAG, "MSG type=$type len=$len data=$strData")
+            }
         }
     }
 
-    // ── 工具函数 ───────────────────────────────────────────────────────────────
+    // ── 工具函数 ──────────────────────────────────────────────────────────────
 
     /**
-     * 将 assets/aec/aec.model 拷贝到内部存储，返回完整文件路径（含文件名）。
-     * AEC 模型是单个文件，非目录。
+     * START_ENGINE payload（官方文档示例）：
+     * - dialog.bot_name：人设名，默认豆包
+     * - dialog.extra.model：模型版本（O2.0 → 1.2.1.1，SC2.0 → 2.2.0.0）
+     * - asr.extra / tts.audio_config 不可为 null
      */
+    private fun buildStartEnginePayload(dialogModel: String, speaker: String): String =
+        """{"dialog":{"bot_name":"豆包","extra":{"model":"$dialogModel"}},"asr":{"extra":{}},"tts":{"audio_config":{},"speaker":"$speaker"}}"""
+
+    private fun requestAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(attrs)
+                .setAcceptsDelayedFocusGain(false)
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener { }
+                .build()
+            audioFocusRequest = req
+            audioManager.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(null)
+        }
+    }
+
     private fun copyAecModelToFilesDir(): String? {
         return try {
             val destFile = context.filesDir.resolve("aec/aec.model")
             if (!destFile.exists()) {
                 destFile.parentFile?.mkdirs()
-                context.assets.open("aec/aec.model").use { input ->
-                    destFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
+                context.assets.open("aec/aec.model").use { it.copyTo(destFile.outputStream()) }
             }
             destFile.absolutePath
-        } catch (_: Exception) {
-            null // 没有 AEC 模型时不影响基础对话，跳过
-        }
+        } catch (_: Exception) { null }
     }
 
-    /** 简单提取 JSON 字符串字段，避免额外依赖 */
+    private fun parseAsrText(json: String): String {
+        return try {
+            val obj = org.json.JSONObject(json)
+            val results = obj.optJSONArray("results")
+            if (results != null && results.length() > 0) {
+                (0 until results.length()).joinToString("") { results.getJSONObject(it).optString("text", "") }
+            } else {
+                obj.optString("text", "")
+            }
+        } catch (_: Exception) { "" }
+    }
+
     private fun parseJsonField(json: String, key: String): String? {
         return try {
-            val org = org.json.JSONObject(json)
-            if (org.has(key)) org.optString(key).takeIf { it.isNotEmpty() } else null
-        } catch (_: Exception) {
-            null
-        }
+            val obj = org.json.JSONObject(json)
+            if (obj.has(key)) obj.optString(key).takeIf { it.isNotEmpty() } else null
+        } catch (_: Exception) { null }
     }
 
-    // ── EventChannel StreamHandler ────────────────────────────────────────────
+    // ── EventChannel ──────────────────────────────────────────────────────────
 
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        eventSink = events
-    }
-
-    override fun onCancel(arguments: Any?) {
-        eventSink = null
-    }
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) { eventSink = events }
+    override fun onCancel(arguments: Any?) { eventSink = null }
 
     private fun pushEvent(data: Map<String, Any?>) {
         mainHandler.post { eventSink?.success(data) }
@@ -263,6 +399,7 @@ class VoiceDialogPlugin(
             engine?.destroyEngine()
         } catch (_: Exception) {}
         engine = null
+        abandonAudioFocus()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
     }

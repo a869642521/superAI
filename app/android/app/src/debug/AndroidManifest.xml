@@ -4,4 +4,12 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Debug：关闭 Impeller，避免模拟器 libEGL「unimplemented OpenGL ES API」刷屏；
+         Release 仍走默认（main 未声明则按 Flutter 版本默认）。 -->
+    <application>
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+    </application>
 </manifest>

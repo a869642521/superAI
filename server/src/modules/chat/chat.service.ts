@@ -87,9 +87,23 @@ export class ChatService {
     });
   }
 
-  async saveMessage(conversationId: string, role: MessageRole, content: string) {
+  async saveMessage(
+    conversationId: string,
+    role: MessageRole,
+    content: string,
+    voicePlain?: string | null,
+  ) {
     const message = await this.prisma.message.create({
-      data: { conversationId, role, content },
+      data: {
+        conversationId,
+        role,
+        content,
+        ...(role === MessageRole.assistant &&
+        voicePlain != null &&
+        voicePlain.length > 0
+          ? { voicePlain }
+          : {}),
+      },
     });
 
     await this.prisma.conversation.update({

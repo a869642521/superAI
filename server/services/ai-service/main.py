@@ -1,10 +1,14 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import chat, memory
 
-load_dotenv()
+# 始终从本服务目录加载 .env（与 uvicorn 启动时的工作目录无关）
+_SERVICE_DIR = Path(__file__).resolve().parent
+load_dotenv(_SERVICE_DIR / ".env")
 
 app = FastAPI(title="Starpath AI Service", version="1.0.0")
 

@@ -1,4 +1,5 @@
 # ─── Flutter / Dart ───────────────────────────────────────────────
+app/.env.dev
 app/.dart_tool/
 app/build/
 app/.flutter-plugins
@@ -31,3 +32,10 @@ server/services/ai-service/.env
 # ─── Docker ──────────────────────────────────────────────────────
 docker-compose.override.yml
 server/services/ai-service/venv/
+
+# ─── 生产/穿透环境变量（含密钥，不提交）────────────────────────────
+server/.env.prod
+app/.env.tunnel
+app/.env.volc
+app/*.zip
+app/bugreport*.zip

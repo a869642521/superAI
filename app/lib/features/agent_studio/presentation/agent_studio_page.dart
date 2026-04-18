@@ -83,8 +83,22 @@ final List<AgentModel> _previewAgents = [
   AgentModel(
     id: 'preview-10', userId: 'preview', name: '音乐人 弦歌', emoji: '🎵',
     personality: const ['感性', '创意', '随性'], bio: '用音乐记录每一刻心情',
-    templateId: 'musician',
+    templateId: 'music-friend',
     gradientStart: '#C471ED', gradientEnd: '#12C2E9',
+    isPublic: true, createdAt: DateTime(2025),
+  ),
+  AgentModel(
+    id: 'preview-11', userId: 'preview', name: '游戏搭子 元气', emoji: '🎮',
+    personality: const ['活泼', '有趣', '竞技'], bio: '一起开黑、攻略推图，游戏里找到默契',
+    templateId: 'game-buddy',
+    gradientStart: '#FF6B6B', gradientEnd: '#FFE66D',
+    isPublic: true, createdAt: DateTime(2025),
+  ),
+  AgentModel(
+    id: 'preview-12', userId: 'preview', name: '效率管家 日日', emoji: '📋',
+    personality: const ['细心', '高效', '条理'], bio: '帮你规划日程、整理任务，把每天过得清爽',
+    templateId: 'daily-butler',
+    gradientStart: '#43C6AC', gradientEnd: '#191654',
     isPublic: true, createdAt: DateTime(2025),
   ),
 ];
@@ -233,7 +247,6 @@ class AgentStudioPage extends ConsumerStatefulWidget {
 class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
   late final List<String> _chipLabels;
   int _chipIndex = 0;
-  final GlobalKey _moreAgentsGridKey = GlobalKey();
   late final PageController _spotlightPageController;
   int _spotlightPageIndex = 0;
 
@@ -315,13 +328,13 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
   void _scrollToMoreAgents() {
     HapticFeedback.selectionClick();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _moreAgentsGridKey.currentContext;
-      if (!mounted || ctx == null) return;
-      Scrollable.ensureVisible(
-        ctx,
+      if (!mounted) return;
+      // 找到最近的 ScrollPosition 并滚动到 grid 区域（约 600px 处）
+      final scrollable = Scrollable.maybeOf(context);
+      scrollable?.position.animateTo(
+        600,
         duration: const Duration(milliseconds: 380),
         curve: Curves.easeOutCubic,
-        alignment: 0.08,
       );
     });
   }
@@ -354,7 +367,7 @@ class _AgentStudioPageState extends ConsumerState<AgentStudioPage> {
           )
         else
           SliverPadding(
-            key: _moreAgentsGridKey,
+            key: ValueKey(_chipIndex),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -989,7 +1002,12 @@ class _SpotlightCommunityCardState extends State<_SpotlightCommunityCard> {
         ),
       ),
     );
-    return IgnorePointer(child: _SpotlightScreenBlend(child: videoWidget));
+    // Android：saveLayer + screen 与卡片底色合成易整屏偏蓝紫；真机/模拟器统一走原片。
+    final skipScreenBlend =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    return IgnorePointer(
+      child: skipScreenBlend ? videoWidget : _SpotlightScreenBlend(child: videoWidget),
+    );
   }
 
   @override

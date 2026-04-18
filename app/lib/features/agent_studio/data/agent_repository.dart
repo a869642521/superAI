@@ -45,4 +45,27 @@ class AgentRepository {
   Future<void> deleteAgent(String id) async {
     await _api.dio.delete('/agents/$id');
   }
+
+  Future<AgentModel> updateAgent(
+    String id, {
+    String? name,
+    String? emoji,
+    List<String>? personality,
+    String? bio,
+    String? gradientStart,
+    String? gradientEnd,
+    bool? isPublic,
+  }) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (emoji != null) body['emoji'] = emoji;
+    if (personality != null) body['personality'] = personality;
+    if (bio != null) body['bio'] = bio;
+    if (gradientStart != null) body['gradientStart'] = gradientStart;
+    if (gradientEnd != null) body['gradientEnd'] = gradientEnd;
+    if (isPublic != null) body['isPublic'] = isPublic;
+
+    final response = await _api.dio.patch('/agents/$id', data: body);
+    return AgentModel.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
 }

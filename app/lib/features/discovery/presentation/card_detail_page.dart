@@ -426,9 +426,11 @@ class _CardDetailPageState extends ConsumerState<CardDetailPage>
                             _GradientCover(card: card),
                       );
                       if (i == 0) {
+                        // 用 SizedBox.expand 确保 Hero 始终有有限尺寸，
+                        // 避免 "box.hasSize && box.size.isFinite" 断言失败
                         img = Hero(
                           tag: 'card-cover-${card.id}',
-                          child: img,
+                          child: SizedBox.expand(child: img),
                         );
                       }
                       return img;

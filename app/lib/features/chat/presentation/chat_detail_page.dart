@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -14,10 +16,13 @@ import 'package:video_player/video_player.dart';
 import 'package:go_router/go_router.dart';
 import 'package:starpath/core/constants.dart';
 import 'package:starpath/core/theme.dart';
+import 'package:starpath/features/agent_studio/data/agent_providers.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/chat/data/chat_providers.dart';
 import 'package:starpath/features/chat/data/main_partner_provider.dart';
 import 'package:starpath/features/chat/domain/chat_model.dart';
+import 'package:starpath/features/chat/presentation/chat_assistant_markdown.dart';
+import 'package:starpath/features/chat/presentation/voice_plain_util.dart';
 import 'package:starpath/features/voice_dialog/voice_dialog_bridge.dart';
 
 Color _hexToColor(String hex) {
@@ -38,38 +43,26 @@ const List<String> _kIpAvatars = [
 
 /// 沉浸页角色视频相对「铺满视口」的缩放（<1 略缩小，四周留黑边）
 const double _kChatHeroVideoScaleFactor = 0.78;
+/// 语音伙伴页：在 [_kChatHeroVideoScaleFactor] 基础上再缩小为 0.9 倍
+const double _kChatHeroVideoVoiceExtraScale = 0.9;
+/// 语音伙伴页：背景视频整体上移（逻辑像素）
+const double _kChatHeroVideoOffsetY = -20;
 
 /// AI 伙伴对话页全屏底色
 const Color _kChatPageBackground = Color(0xFF18082A);
 
+/// 语音沉浸页欢迎文案距内容区顶（顶栏下方，与示意红框区域对齐）
+const double _kImmersiveContentTop = 12;
+
+/// 语音聆听提示：无底色，文案与动效点为浅紫（与 [StarpathColors.secondary] 一致）
+
+/// 是否显示全屏角色背景视频。
+const bool _kShowChatHeroVideo =
+    bool.fromEnvironment('SHOW_CHAT_HERO_VIDEO', defaultValue: true);
+
 /// 伙伴回复气泡底色（不透明）
 const Color _kPartnerReplyBubbleColor = Color(0xFF341545);
 
-/// 颜色矩阵：将像素亮度映射到 alpha 通道，黑色→透明、亮色→不透明。
-/// 通过 ColorFilterLayer 在合成器层面生效，能作用于 VideoPlayer 的 TextureLayer。
-/// A' = 0.30R + 0.59G + 0.11B − 0.10（负偏移让近黑区也透明，过渡更干净）
-const ColorFilter _kBlackRemovalFilter = ColorFilter.matrix(<double>[
-  //  R      G      B      A    offset
-      1,     0,     0,     0,   0,      // R' = R
-      0,     1,     0,     0,   0,      // G' = G
-      0,     0,     1,     0,   0,      // B' = B
-      0.30,  0.59,  0.11,  0,  -0.10,  // A' = luma − 0.10
-]);
-
-/// 与页面蓝紫底呼应的渐变，经 [ShaderMask] + [BlendMode.screen] 与视频逐像素滤色混合。
-/// 说明：canvas.saveLayer 无法可靠作用在 VideoPlayer 的 Texture 上；ShaderMask 走另一套合成路径。
-Shader _chatHeroScreenBlendShader(Rect bounds) {
-  return const LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [
-      Color(0xFF4D96FF),
-      Color(0xFF6366F1),
-      Color(0xFF9B72FF),
-    ],
-    stops: [0.0, 0.48, 1.0],
-  ).createShader(bounds);
-}
 
 /// 对话页四段视频阶段（与 Spotlight 卡片保持一致）
 enum _ChatVideoPhase { hello, hait, breathe, down }
@@ -107,6 +100,14 @@ Widget _ipAvatarWidget({required String? agentId, required double size}) {
   );
 }
 
+/// 聊天页入口模式
+enum ChatEntryMode {
+  /// 默认：语音沉浸模式（全屏视频 + 三按钮语音控制栏）
+  voice,
+  /// 纯文字聊天模式（从语音页键盘按钮跳转而来，无背景视频）
+  text,
+}
+
 class ChatDetailPage extends ConsumerStatefulWidget {
   /// 直接传会话 ID（优先使用）
   final String? conversationId;
@@ -123,6 +124,9 @@ class ChatDetailPage extends ConsumerStatefulWidget {
   /// 从 Spotlight 卡片传入的显示名称（后端未响应前优先展示）
   final String? agentName;
 
+  /// 初始进入模式：voice（默认语音沉浸）或 text（纯文字聊天）
+  final ChatEntryMode initialMode;
+
   const ChatDetailPage({
     super.key,
     this.conversationId,
@@ -132,6 +136,7 @@ class ChatDetailPage extends ConsumerStatefulWidget {
     this.breatheVideo,
     this.downVideo,
     this.agentName,
+    this.initialMode = ChatEntryMode.voice,
   }) : assert(
           conversationId != null || agentId != null,
           'conversationId or agentId is required',
@@ -177,12 +182,20 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   bool _videoReady = false;
   /// 当前播放阶段（同 Spotlight 卡片）
   _ChatVideoPhase _videoPhase = _ChatVideoPhase.hello;
+  /// TTS / 火山实时语音播放时暂停背景 MP4，避免与麦克风/扬声器争用解码器与音频焦点（模拟器上尤其明显）
+  bool _bgPausedForExternalAudio = false;
 
   // ── 语音识别（默认连续聆听，无弹窗）──────────────────────────────────────────
   final SpeechToText _stt = SpeechToText();
   bool _sttAvailable = false;
   /// 沉浸页实时识别文案（有消息时也可在后台识别并自动发送）
   String _voiceTranscript = '';
+  /// dispose 开始时立即置 true，所有 async 回调检查此标志后才 setState
+  bool _disposed = false;
+  /// Android 报 `error_speech_timeout` + permanent 后若立刻再 listen，会「准备就绪↔正在聆听」死循环
+  DateTime? _sttCooldownUntil;
+  Timer? _sttResumeTimer;
+  Timer? _sttCooldownEndsTimer;
 
   // ── TTS：语音发话后，在回复完成时朗读助手文本 ───────────────────────────────
   final FlutterTts _tts = FlutterTts();
@@ -195,18 +208,43 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   StreamSubscription<VoiceDialogEvent>? _voiceBridgeSub;
   /// 当前 AI 正在通过 SDK 说话（用于 UI 指示 / 打断按钮）
   bool _sdkAiSpeaking = false;
+  /// Volc SDK 连接状态：null=未初始化/连接中，true=已连接，false=连接失败
+  bool? _volcConnected;
+  /// Volc SDK 最近一次错误信息（用于 UI 提示）
+  String? _volcLastError;
   /// 已通过 SDK 收到的 AI 回复文本（流式拼接）
   String _sdkAiBuffer = '';
+  /// 本轮 Volc 用户话（userFinalText 时记录，aiRoundDone 时落库）
+  String _volcCurrentUserText = '';
 
-  /// 是否走火山实时语音 SDK：构建/运行时传入
-  /// `flutter run --dart-define=VOLC_VOICE_SDK=true --dart-define=VOLC_APP_ID=... --dart-define=VOLC_APP_TOKEN=...`
-  /// 勿把密钥写入仓库；密钥泄露请到控制台轮换。
+  /// 系统 STT：同一次聆听里取「更完整」的识别串；终稿 debounce 后再发，避免 final 早于整句
+  String _sttSessionBest = '';
+  Timer? _sttFinalizeTimer;
+
+  /// 是否走火山端到端实时语音 SDK。
+  /// 与「统一大脑」（STT→Socket→LLM→TTS 落库）并存会分叉上下文，故需同时开启：
+  /// `--dart-define=VOLC_VOICE_SDK=true --dart-define=VOLC_E2E_VOICE=true`
   static const bool _useVolcSdk =
-      bool.fromEnvironment('VOLC_VOICE_SDK', defaultValue: false);
+      bool.fromEnvironment('VOLC_VOICE_SDK', defaultValue: false) &&
+      bool.fromEnvironment('VOLC_E2E_VOICE', defaultValue: false);
   static const String _volcAppId =
       String.fromEnvironment('VOLC_APP_ID', defaultValue: '');
+  static const String _volcAppKey =
+      String.fromEnvironment('VOLC_APP_KEY', defaultValue: '');
+  /// Access Token（控制台「服务接口认证信息」）
   static const String _volcAppToken =
       String.fromEnvironment('VOLC_APP_TOKEN', defaultValue: '');
+  /// StartSession 必传 model：O2.0 → 1.2.1.1，SC2.0 → 2.2.0.0
+  static const String _volcDialogModel =
+      String.fromEnvironment('VOLC_DIALOG_MODEL', defaultValue: '1.2.1.1');
+  /// O 系列默认 vv 音色；SC/SC2 需换文档所列 ICL_/saturn_ 音色并与 model 匹配
+  static const String _volcTtsSpeaker = String.fromEnvironment(
+    'VOLC_TTS_SPEAKER',
+    defaultValue: 'zh_female_vv_jupiter_bigtts',
+  );
+  /// AEC 回声消除：真机扬声器开启，戴耳机或模拟器关闭
+  static const bool _volcEnableAec =
+      bool.fromEnvironment('VOLC_ENABLE_AEC', defaultValue: false);
 
   /// 无历史消息且未切键盘：展示底部语音沉浸栏；有历史消息：始终可语音。
   /// WebSocket 未连上但 REST 已拿到会话时，不再显示「连接中」。
@@ -216,6 +254,67 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     return _ChatConnUi.connecting;
   }
 
+  /// 用于打开「调整性格」等需要真实 agentId 的入口。
+  String? get _resolvedAgentId {
+    final fromWidget = widget.agentId?.trim();
+    if (fromWidget != null && fromWidget.isNotEmpty) return fromWidget;
+    final fromConv = _conversation?.agentId.trim();
+    if (fromConv != null && fromConv.isNotEmpty) return fromConv;
+    return null;
+  }
+
+  /// 从文字页返回时刷新语音页消息列表，避免两页内容衔接不上
+  Future<void> _refreshMessagesFromServer() async {
+    final convId = _conversation?.id ?? widget.conversationId;
+    if (convId == null || convId.isEmpty || _disposed || !mounted) return;
+    try {
+      final repo = ref.read(chatRepositoryProvider);
+      final messages = await repo.getMessages(convId);
+      if (!mounted || _disposed) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(messages.reversed);
+        _settledCount = _messages.length;
+      });
+      _scrollToBottom();
+    } catch (_) {
+      // 刷新失败静默忽略，不影响正常使用
+    }
+  }
+
+  Future<void> _reloadConversationSnapshot() async {
+    final conv = _conversation;
+    if (conv == null) return;
+    try {
+      final convs = await ref.read(conversationsProvider.future);
+      for (final c in convs) {
+        if (c.id == conv.id) {
+          if (mounted) setState(() => _conversation = c);
+          break;
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _openPartnerPersonalityEditor() async {
+    final id = _resolvedAgentId;
+    if (id == null || id.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前无法识别伙伴，请稍后再试')),
+        );
+      }
+      return;
+    }
+    final changed = await context.push<bool>('/agents/$id/personality');
+    if (changed == true && mounted) {
+      ref.invalidate(myAgentsProvider);
+      ref.invalidate(conversationsProvider);
+      await _reloadConversationSnapshot();
+    }
+  }
+
   bool get _shouldRunContinuousVoice =>
       _sttAvailable &&
       _conversation != null &&
@@ -223,27 +322,52 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       !_isThinking &&        // AI 思考时暂停，减少不必要的音频冲突
       (_messages.isNotEmpty || !_showTextInput);
 
+  bool get _isTextMode => widget.initialMode == ChatEntryMode.text;
+
+  /// 语音页点键盘进入的全屏文字聊天：与 [widget.initialMode] 独立，不新开 Route，
+  /// 避免第二个 Socket / 第二份 [_messages] 与语音页「接不上」。
+  bool _inlineTextMode = false;
+
+  bool get _showFullTextChat =>
+      widget.initialMode == ChatEntryMode.text || _inlineTextMode;
+
   @override
   void initState() {
     super.initState();
-    _loadConversation();
-    if (_useVolcSdk) {
-      _initVolcVoice();
+    // text 模式：直接进入文字聊天，不启动语音、不加载视频
+    if (_isTextMode) {
+      _showTextInput = true;
+      _voiceBarWithMessages = false;
     } else {
-      _initStt();
-      _initTts();
+      if (_useVolcSdk) {
+        _initVolcVoice();
+      } else {
+        _initStt();
+        _initTts();
+      }
+      if (_kShowChatHeroVideo) {
+        _initBgVideo();
+      }
     }
-    _initBgVideo();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _continuousVoiceWorker();
-    });
+    // text 模式延迟加载：等待语音页可能正在进行的 saveTurn 落库
+    _loadConversation(delayed: _isTextMode);
   }
 
   // ── 视频初始化 ─────────────────────────────────────────────────────────────
 
+  static final VideoPlayerOptions _kBgVideoPlayerOptions = VideoPlayerOptions(
+    mixWithOthers: true,
+  );
+
   VideoPlayerController _makeCtrl(String asset) => kIsWeb
-      ? VideoPlayerController.networkUrl(Uri.parse('assets/$asset'))
-      : VideoPlayerController.asset(asset);
+      ? VideoPlayerController.networkUrl(
+          Uri.parse('assets/$asset'),
+          videoPlayerOptions: _kBgVideoPlayerOptions,
+        )
+      : VideoPlayerController.asset(
+          asset,
+          videoPlayerOptions: _kBgVideoPlayerOptions,
+        );
 
   Future<VideoPlayerController?> _initOne(String? asset,
       {required bool loop}) async {
@@ -263,11 +387,11 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   }
 
   Future<void> _initBgVideo() async {
-    // 优先用 Spotlight 卡片传入的素材，否则回退到默认两段视频
-    final helloAsset   = widget.helloVideo   ?? 'video/jq.mp4';
-    final haitAsset    = widget.haitVideo    ?? 'video/jq2.mp4';
-    final breatheAsset = widget.breatheVideo;   // 无默认
-    final downAsset    = widget.downVideo;       // 无默认
+    // 只使用 widget 传入的素材，无传入则跳过（避免加载不存在的默认资源崩溃）
+    final helloAsset   = widget.helloVideo;
+    final haitAsset    = widget.haitVideo;
+    final breatheAsset = widget.breatheVideo;
+    final downAsset    = widget.downVideo;
 
     final results = await Future.wait([
       _initOne(helloAsset,   loop: false),
@@ -389,13 +513,139 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       case _ChatVideoPhase.breathe:
         _breatheCtrl?.pause();
       case _ChatVideoPhase.down:
-        break;
+        _downCtrl?.pause();
+    }
+  }
+
+  /// 暂停四条背景视频（任意正在播放的），供 TTS / 实时语音与 STT 争用时调用。
+  /// 仅 pause，不移除阶段 tick 监听器，避免恢复后无法 hello→hait→breathe 切换。
+  void _pauseBgVideoForExternalAudio() {
+    if (!_videoReady || _bgPausedForExternalAudio) return;
+    final ctrls = [_helloCtrl, _haitCtrl, _breatheCtrl, _downCtrl];
+    final anyPlaying = ctrls.any((c) => c?.value.isPlaying ?? false);
+    if (!anyPlaying) return;
+    _bgPausedForExternalAudio = true;
+    for (final c in ctrls) {
+      c?.pause();
+    }
+  }
+
+  /// 与 [_pauseBgVideoForExternalAudio] 成对：按当前 [_videoPhase] 恢复播放。
+  void _resumeBgVideoAfterExternalAudio() {
+    if (!_bgPausedForExternalAudio || _disposed) return;
+    _bgPausedForExternalAudio = false;
+    if (!mounted || !_videoReady) return;
+    switch (_videoPhase) {
+      case _ChatVideoPhase.hello:
+        unawaited(_helloCtrl?.play());
+      case _ChatVideoPhase.hait:
+        unawaited(_haitCtrl?.play());
+      case _ChatVideoPhase.breathe:
+        unawaited(_breatheCtrl?.play());
+      case _ChatVideoPhase.down:
+        unawaited(_downCtrl?.play());
     }
   }
 
   Future<void> _initStt() async {
-    final ok = await _stt.initialize();
-    if (mounted) setState(() => _sttAvailable = ok);
+    final ok = await _stt.initialize(
+      onStatus: _onSttStatus,
+      onError: _onSttError,
+    );
+    if (!ok) {
+      debugPrint(
+        '[STT] speech_to_text 初始化失败（常见：模拟器无麦克风、未授权麦克风/语音识别）',
+      );
+    }
+    _safeSetState(() => _sttAvailable = ok);
+    // 会话加载后 _maybeStartListening 会再触发一次；这里提前试一次
+    if (ok) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      _maybeStartListening();
+    }
+  }
+
+  // ── STT 状态回调（事件驱动替代 while 轮询）───────────────────────────────────
+
+  /// `speech_to_text` 状态：'listening' | 'notListening' | 'done' | 'doneNoResult'
+  void _onSttStatus(String status) {
+    _safeSetState(() {}); // 刷新麦克风 UI
+    if (_disposed || !mounted) return;
+    // notListening 与 done 往往接连到达：合并为一次防抖重启，避免双重 listen
+    if (status == 'done' ||
+        status == 'notListening' ||
+        status == 'doneNoResult') {
+      _scheduleResumeSttAfterSessionEnd();
+    }
+  }
+
+  void _onSttError(SpeechRecognitionError err) {
+    debugPrint('[STT] platform error: $err');
+    _sttResumeTimer?.cancel();
+    _sttResumeTimer = null;
+    _sttCooldownEndsTimer?.cancel();
+    final msg = err.errorMsg.toLowerCase();
+    final noSpeech = msg.contains('timeout') ||
+        msg.contains('no_match') ||
+        msg.contains('speech_timeout');
+    final longCooldown = err.permanent || noSpeech;
+    final cool = longCooldown ? const Duration(seconds: 14) : const Duration(seconds: 3);
+    _sttCooldownUntil = DateTime.now().add(cool);
+    _sttCooldownEndsTimer = Timer(cool + const Duration(milliseconds: 120), () {
+      _sttCooldownEndsTimer = null;
+      if (_disposed || !mounted) return;
+      _sttCooldownUntil = null;
+      _safeSetState(() {});
+      _maybeStartListening();
+    });
+    _safeSetState(() {});
+  }
+
+  /// 会话正常结束（非 error 路径）后防抖再 listen，合并 notListening + done。
+  void _scheduleResumeSttAfterSessionEnd() {
+    _sttResumeTimer?.cancel();
+    _sttResumeTimer = Timer(const Duration(milliseconds: 600), () {
+      _sttResumeTimer = null;
+      if (_disposed || !mounted) return;
+      _maybeStartListening();
+    });
+  }
+
+  /// 用户点麦克风：取消冷却并尝试重新打开识别（应对模拟器/系统卡死）
+  void _userRetryListening() {
+    _sttResumeTimer?.cancel();
+    _sttResumeTimer = null;
+    _sttCooldownEndsTimer?.cancel();
+    _sttCooldownEndsTimer = null;
+    _sttCooldownUntil = null;
+    unawaited(_stt.stop());
+    Future<void>.delayed(const Duration(milliseconds: 220), () {
+      if (!_disposed && mounted) _maybeStartListening();
+    });
+  }
+
+  /// 幂等：满足条件且未在聆听时启动 STT（多处调用安全，不会重复开启）
+  void _maybeStartListening() {
+    if (_disposed || !mounted || !_sttAvailable) return;
+    final until = _sttCooldownUntil;
+    if (until != null && DateTime.now().isBefore(until)) return;
+    if (_stt.isListening || !_shouldRunContinuousVoice) return;
+    unawaited(_stt.listen(
+      onResult: _onSpeechResult,
+      listenFor: const Duration(minutes: 5),
+      // 停顿略长：减少「句中停顿被当成说完」导致 final 只有几个字
+      pauseFor: const Duration(seconds: 16),
+      localeId: 'zh_CN',
+      listenOptions: SpeechListenOptions(
+        cancelOnError: true,
+        partialResults: true,
+      ),
+    ));
+  }
+
+  /// 幂等：条件不满足时停止 STT
+  void _stopListeningIfActive() {
+    if (_stt.isListening) unawaited(_stt.stop());
   }
 
   Future<void> _initTts() async {
@@ -404,22 +654,28 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       await _tts.setSpeechRate(0.48);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
-      // TTS 开始播放：暂停 STT
       _tts.setStartHandler(() {
-        if (mounted) setState(() => _ttsPlaying = true);
+        _safeSetState(() => _ttsPlaying = true);
+        _stopListeningIfActive(); // TTS 开口时停 STT，防止 AI 声音被当作用户输入
+        _pauseBgVideoForExternalAudio(); // 停背景 MP4，减轻与 TTS 的解码/音频会话争用
       });
-      // TTS 播放完毕：恢复 STT（continuous worker 自动重启 listen）
       _tts.setCompletionHandler(() {
-        if (mounted) setState(() => _ttsPlaying = false);
+        _safeSetState(() => _ttsPlaying = false);
+        _resumeBgVideoAfterExternalAudio();
+        _maybeStartListening(); // TTS 说完后重启 STT
       });
       _tts.setCancelHandler(() {
-        if (mounted) setState(() => _ttsPlaying = false);
+        _safeSetState(() => _ttsPlaying = false);
+        _resumeBgVideoAfterExternalAudio();
+        _maybeStartListening();
       });
       _tts.setErrorHandler((msg) {
         debugPrint('[TTS] error: $msg');
-        if (mounted) setState(() => _ttsPlaying = false);
+        _safeSetState(() => _ttsPlaying = false);
+        _resumeBgVideoAfterExternalAudio();
+        _maybeStartListening();
       });
-      if (mounted) setState(() => _ttsReady = true);
+      _safeSetState(() => _ttsReady = true);
     } catch (e) {
       debugPrint('[TTS] init failed: $e');
     }
@@ -429,20 +685,27 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   Future<void> _initVolcVoice() async {
     if (_volcAppId.isEmpty || _volcAppToken.isEmpty) {
-      debugPrint(
-          '[VolcVoice] 未配置 VOLC_APP_ID / VOLC_APP_TOKEN，回退 STT+TTS');
+      debugPrint('[VolcVoice] 缺少 VOLC_APP_ID 或 VOLC_APP_TOKEN，回退 STT+TTS');
       await _initStt();
       await _initTts();
       return;
     }
+    debugPrint(
+      '[VolcVoice] 启动 dialogModel=$_volcDialogModel speaker=$_volcTtsSpeaker',
+    );
     await _voiceBridge.prepareEnvironment();
     _voiceBridgeSub = _voiceBridge.events.listen(_onVolcEvent);
     final ok = await _voiceBridge.startDialog(const VoiceDialogConfig(
-      appId:    _volcAppId,
-      appToken: _volcAppToken,
+      appId:       _volcAppId,
+      appKey:      _volcAppKey,
+      appToken:    _volcAppToken,
+      dialogModel: _volcDialogModel,
+      ttsSpeaker:  _volcTtsSpeaker,
+      enableAec:   _volcEnableAec,
     ));
     if (!ok && mounted) {
       debugPrint('[VolcVoice] startDialog failed, fallback to STT/TTS');
+      _safeSetState(() => _volcConnected = false);
       await _initStt();
       await _initTts();
     }
@@ -453,16 +716,22 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     switch (event.type) {
       case VoiceDialogEventType.connected:
         debugPrint('[VolcVoice] connected');
+        _safeSetState(() => _volcConnected = true);
 
       case VoiceDialogEventType.userSpeaking:
-        // 实时显示用户正在说的内容
-        setState(() => _voiceTranscript = event.text ?? '');
+        _safeSetState(() => _voiceTranscript = event.text ?? '');
 
       case VoiceDialogEventType.userFinalText:
-        // 用户一句话结束，添加消息气泡
-        final text = event.text ?? '';
-        if (text.isNotEmpty && !_isThinking) {
-          setState(() {
+        final text = (event.text ?? '').trim();
+        if (text.isEmpty) break;
+        // SDK 可能先发短终稿再发整句：首条后 _isThinking 已为 true，必须把后续更长的
+        // userFinal 合并进同一条用户气泡，否则库里只剩几个字。
+        final last = _messages.isNotEmpty ? _messages.last : null;
+        final refiningUser =
+            last != null && last.isUser && !_sdkAiSpeaking;
+        if (!_isThinking) {
+          _volcCurrentUserText = text;
+          _safeSetState(() {
             _voiceTranscript = '';
             _messages.add(MessageModel(
               role: 'user',
@@ -473,13 +742,32 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
             _sdkAiBuffer = '';
           });
           _scrollToBottom();
+        } else if (refiningUser) {
+          final merged = _preferRicherTranscript(last.content, text);
+          if (merged != last.content) {
+            _volcCurrentUserText = merged;
+            _safeSetState(() {
+              _messages[_messages.length - 1] = MessageModel(
+                id: last.id,
+                role: last.role,
+                content: merged,
+                voicePlain: last.voicePlain,
+                createdAt: last.createdAt,
+              );
+            });
+            _scrollToBottom();
+          }
+        } else if (text.length > _volcCurrentUserText.length) {
+          _volcCurrentUserText = text;
         }
 
       case VoiceDialogEventType.aiSpeaking:
-        setState(() {
+        // 不再在此处触发 down 视频重播：会与实时语音并发占用 MediaCodec/音频焦点，
+        // 模拟器上易出现 aac/h264 buffer discard、语音断续。需要 down 动画可用户点热区触发。
+        _pauseBgVideoForExternalAudio();
+        _safeSetState(() {
           _sdkAiSpeaking = true;
           _sdkAiBuffer = '';
-          // 开始 AI 消息气泡
           if (_messages.isEmpty || _messages.last.isUser) {
             _messages.add(MessageModel(
               role: 'assistant',
@@ -488,16 +776,22 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
             ));
           }
         });
-        // AI 开口时播放 down 动画
-        _replayBgVideoFromHotZone();
 
       case VoiceDialogEventType.aiTextDelta:
-        // 流式文本拼到最后一条 assistant 消息
         final delta = event.text ?? '';
         if (delta.isNotEmpty) {
-          setState(() {
+          _safeSetState(() {
             _sdkAiBuffer += delta;
-            if (_messages.isNotEmpty && !_messages.last.isUser) {
+            // 防御：若 AI 消息占位尚未创建（aiSpeaking 未到或乱序），补创建
+            if (_messages.isEmpty || _messages.last.isUser) {
+              _isThinking = false;
+              _sdkAiSpeaking = true;
+              _messages.add(MessageModel(
+                role: 'assistant',
+                content: _sdkAiBuffer,
+                createdAt: DateTime.now(),
+              ));
+            } else {
               _messages[_messages.length - 1] = MessageModel(
                 role: 'assistant',
                 content: _sdkAiBuffer,
@@ -509,36 +803,46 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         }
 
       case VoiceDialogEventType.aiRoundDone:
-        setState(() {
+        _safeSetState(() {
           _sdkAiSpeaking = false;
           _isThinking = false;
           _settledCount = _messages.length;
         });
         HapticFeedback.lightImpact();
+        // 把本轮用户话 + AI 回复同步落库（保证与文字对话共享同一会话历史）
+        _saveVolcTurnToBackend();
         ref.invalidate(conversationsProvider);
+        _resumeBgVideoAfterExternalAudio();
 
       case VoiceDialogEventType.interrupted:
-        setState(() => _sdkAiSpeaking = false);
+        _safeSetState(() => _sdkAiSpeaking = false);
+        _resumeBgVideoAfterExternalAudio();
 
       case VoiceDialogEventType.error:
         debugPrint('[VolcVoice] error: ${event.errorMessage}');
-        setState(() {
+        _safeSetState(() {
           _isThinking = false;
           _sdkAiSpeaking = false;
+          _volcConnected = false;
+          _volcLastError = event.errorMessage;
         });
+        _resumeBgVideoAfterExternalAudio();
 
       case VoiceDialogEventType.disconnected:
-        setState(() {
+        _safeSetState(() {
           _sdkAiSpeaking = false;
           _isThinking = false;
+          _volcConnected = false;
         });
+        _resumeBgVideoAfterExternalAudio();
     }
   }
 
   Future<void> _stopAssistantSpeech() async {
     try {
       await _tts.stop();
-      if (mounted) setState(() => _ttsPlaying = false);
+      _safeSetState(() => _ttsPlaying = false);
+      _resumeBgVideoAfterExternalAudio();
     } catch (_) {}
   }
 
@@ -549,7 +853,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     if (_messages.isEmpty) return;
     final last = _messages.last;
     if (last.isUser) return;
-    final text = last.content.trim();
+    final text = voicePlainForMessage(last);
     if (text.isEmpty) return;
     try {
       // 先停掉 STT，再开始 TTS，彻底避免音频冲突
@@ -563,51 +867,114 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     }
   }
 
-  void _onSpeechResult(SpeechRecognitionResult result) {
+  /// Volc 端到端每轮结束后把用户话 + AI 回复写入后端，保证会话历史同步。
+  void _saveVolcTurnToBackend() {
+    final userText = _volcCurrentUserText.trim();
+    final aiText = _sdkAiBuffer.trim();
+    _volcCurrentUserText = '';
+    if (userText.isEmpty || aiText.isEmpty) return;
+    final authState = ref.read(authProvider);
+    final userId = authState.userId ?? '';
+    final convId = _conversation?.id ?? widget.conversationId ?? '';
+    if (convId.isEmpty) return;
+    _socket?.emit('saveTurn', {
+      'conversationId': convId,
+      'userId': userId,
+      'userText': userText,
+      'assistantText': aiText,
+    });
+  }
+
+  /// 再次朗读最近一条助手回复（口语化文本 / voicePlain）
+  Future<void> _replayLastAssistantTts() async {
+    if (_messages.isEmpty || _useVolcSdk || !_ttsReady) return;
+    final last = _messages.last;
+    if (!last.isAssistant) return;
+    final text = voicePlainForMessage(last);
+    if (text.isEmpty) return;
+    _pendingSpeakAssistantReply = false;
+    await _stopAssistantSpeech();
     if (!mounted) return;
-    final words = result.recognizedWords;
-    setState(() => _voiceTranscript = words);
-    if (result.finalResult && words.trim().isNotEmpty && !_isThinking) {
-      _sendVoiceMessage(words.trim(), speakAssistantReply: true);
-      if (mounted) setState(() => _voiceTranscript = '');
+    try {
+      await _stt.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _tts.stop();
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('[TTS] replay speak failed: $e');
+      if (mounted) setState(() => _ttsPlaying = false);
     }
   }
 
-  /// 后台循环：满足条件时持续 listen，切键盘或离开时 stop。
-  Future<void> _continuousVoiceWorker() async {
-    while (mounted) {
-      if (!_shouldRunContinuousVoice) {
-        if (_stt.isListening) await _stt.stop();
-        if (mounted) setState(() {});
-        await Future<void>.delayed(const Duration(milliseconds: 280));
-        continue;
-      }
-
-      try {
-        if (mounted) setState(() {});
-        await _stt.listen(
-          onResult: _onSpeechResult,
-          listenFor: const Duration(minutes: 3),
-          pauseFor: const Duration(seconds: 3),
-          localeId: 'zh_CN',
-          listenOptions: SpeechListenOptions(
-            cancelOnError: true,
-            partialResults: true,
-          ),
-        );
-      } catch (e, st) {
-        debugPrint('[STT] listen error: $e\n$st');
-      }
-
-      if (!mounted) break;
-      if (mounted) setState(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+  String _voiceAssistantSubtitleLive() {
+    if (_isThinking && _streamingContent.trim().isNotEmpty) {
+      return stripMarkdownForVoice(_streamingContent);
     }
+    if (_messages.isEmpty) return '';
+    final last = _messages.last;
+    if (!last.isAssistant || last.content.trim().isEmpty) return '';
+    return voicePlainForMessage(last);
   }
+
+  bool _shouldShowVoiceAssistantSubtitle() {
+    if (_useVolcSdk || _isTextMode) return false;
+    if (_ttsPlaying) return true;
+    if (_isThinking && _streamingContent.trim().isNotEmpty) return true;
+    if (_messages.isEmpty) return false;
+    final last = _messages.last;
+    return last.isAssistant && last.content.trim().isNotEmpty;
+  }
+
+  /// 安全 setState：_disposed 置 true 后所有 async 路径均走此方法，
+  /// 避免 widget 已 defunct 但 mounted 检查刚刚通过的 race condition。
+  void _safeSetState(VoidCallback fn) {
+    if (!_disposed && mounted) setState(fn);
+  }
+
+  /// 在 partial / 多次 final 之间选更完整的一句（常见：final 比最后 partial 还短）
+  static String _preferRicherTranscript(String previous, String incoming) {
+    final a = previous.trim();
+    final b = incoming.trim();
+    if (b.isEmpty) return a;
+    if (a.isEmpty) return b;
+    if (b.startsWith(a) || a.startsWith(b)) {
+      return a.length >= b.length ? a : b;
+    }
+    if (b.contains(a) && b.length > a.length) return b;
+    if (a.contains(b) && a.length > b.length) return a;
+    return b.length >= a.length ? b : a;
+  }
+
+  void _onSpeechResult(SpeechRecognitionResult result) {
+    if (_disposed || !mounted) return;
+    final words = result.recognizedWords.trim();
+    _safeSetState(() => _voiceTranscript = words.isEmpty ? _voiceTranscript : words);
+    if (words.isNotEmpty) {
+      _sttSessionBest = _preferRicherTranscript(_sttSessionBest, words);
+    }
+    if (!result.finalResult) return;
+
+    _sttFinalizeTimer?.cancel();
+    _sttFinalizeTimer = Timer(const Duration(milliseconds: 520), () {
+      _sttFinalizeTimer = null;
+      if (_disposed || !mounted) return;
+      final t = _sttSessionBest.trim();
+      _sttSessionBest = '';
+      if (t.isEmpty || _isThinking) return;
+      _sendVoiceMessage(t, speakAssistantReply: true);
+      _safeSetState(() => _voiceTranscript = '');
+    });
+  }
+
 
   void _sendVoiceMessage(String text, {bool speakAssistantReply = false}) {
     if (text.isEmpty || _isThinking) return;
 
+    _sttFinalizeTimer?.cancel();
+    _sttFinalizeTimer = null;
+    _sttSessionBest = '';
+
+    _stopListeningIfActive(); // 立即停 STT，等 AI 回复完再重启
     unawaited(_stopAssistantSpeech());
     if (speakAssistantReply) {
       _pendingSpeakAssistantReply = true;
@@ -639,14 +1006,20 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
 
   @override
   void dispose() {
+    // 最先置 true：所有还在飞的 async 回调（_continuousVoiceWorker、_onSpeechResult 等）
+    // 通过 _disposed 提前跳出，彻底消除 "setState on defunct element" 断言。
+    _disposed = true;
     _thinkingTimer?.cancel();
+    _sttFinalizeTimer?.cancel();
+    _sttResumeTimer?.cancel();
+    _sttCooldownEndsTimer?.cancel();
     _bgPauseCurrent();
     _helloCtrl?.dispose();
     _haitCtrl?.dispose();
     _breatheCtrl?.dispose();
     _downCtrl?.removeListener(_bgOnDownTick);
     _downCtrl?.dispose();
-    _stt.stop();
+    unawaited(_stt.stop());
     unawaited(_stopAssistantSpeech());
     unawaited(_voiceBridgeSub?.cancel());
     unawaited(_voiceBridge.dispose());
@@ -658,7 +1031,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     super.dispose();
   }
 
-  Future<void> _loadConversation() async {
+  Future<void> _loadConversation({bool delayed = false}) async {
+    // text 模式：若是从语音页跳转过来，saveTurn 可能还在落库中，
+    // 延迟 600ms 再拉消息，保证能拿到最新一轮语音对话。
+    if (delayed) {
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
+    if (_disposed || !mounted) return;
     try {
       final repo = ref.read(chatRepositoryProvider);
 
@@ -680,11 +1059,15 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       if (mounted) {
         setState(() {
           _conversation = conv;
-          _messages.addAll(messages.reversed);
+          _messages
+            ..clear()
+            ..addAll(messages.reversed);
           _settledCount = _messages.length;
         });
         _scrollToBottom();
         _connectSocket();
+        // 会话就绪后激活 STT（此时 _conversation != null，条件满足）
+        Future<void>.delayed(const Duration(milliseconds: 300), _maybeStartListening);
       }
     } catch (e) {
       if (mounted) {
@@ -706,6 +1089,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
           );
         });
         _connectSocket();
+        Future<void>.delayed(const Duration(milliseconds: 300), _maybeStartListening);
       }
     }
   }
@@ -716,11 +1100,16 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     final token = authState.token ?? '';
     final userId = authState.userId ?? '';
 
+    final extraHeaders = <String, String>{
+      'Authorization': 'Bearer $token',
+      if (AppConstants.usesNgrokForApi) 'ngrok-skip-browser-warning': 'true',
+    };
+
     _socket = io.io(
       '${AppConstants.wsBaseUrl}/chat',
       io.OptionBuilder()
           .setTransports(['websocket'])
-          .setExtraHeaders({'Authorization': 'Bearer $token'})
+          .setExtraHeaders(extraHeaders)
           .setQuery({'userId': userId})
           .enableAutoConnect()
           .build(),
@@ -735,7 +1124,11 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     });
 
     _socket!.onConnectError((data) {
-      debugPrint('[ChatSocket] connect_error: $data');
+      debugPrint(
+        '[ChatSocket] connect_error: $data\n'
+        '  → 请确认宿主机已启动 Nest（端口 3000），且模拟器用 10.0.2.2 访问本机。\n'
+        '  → 终端执行: make backend  或  cd server && npm run start:dev',
+      );
     });
 
     _socket!.on('thinkingChunk', (data) {
@@ -753,10 +1146,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
           if (_messages.isNotEmpty &&
               _messages.last.role == 'assistant' &&
               _messages.last.id == null) {
+            final prev = _messages.last;
             _messages[_messages.length - 1] = MessageModel(
+              id: prev.id,
               role: 'assistant',
               content: _streamingContent,
-              createdAt: _messages.last.createdAt,
+              voicePlain: prev.voicePlain,
+              createdAt: prev.createdAt,
             );
           } else {
             _messages.add(MessageModel(
@@ -770,9 +1166,29 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       }
     });
 
-    _socket!.on('messageComplete', (_) {
+    _socket!.on('messageComplete', (raw) {
+      String? voicePlain;
+      if (raw is Map) {
+        final m = Map<dynamic, dynamic>.from(raw);
+        final vp = m['voicePlain'];
+        if (vp is String && vp.trim().isNotEmpty) {
+          voicePlain = vp.trim();
+        }
+      }
       if (mounted) {
         setState(() {
+          if (voicePlain != null &&
+              _messages.isNotEmpty &&
+              !_messages.last.isUser) {
+            final last = _messages.last;
+            _messages[_messages.length - 1] = MessageModel(
+              id: last.id,
+              role: last.role,
+              content: last.content,
+              voicePlain: voicePlain,
+              createdAt: last.createdAt,
+            );
+          }
           _isThinking = false;
           _streamingContent = '';
           _thinkingContent = '';
@@ -781,6 +1197,17 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
         HapticFeedback.lightImpact();
         ref.invalidate(conversationsProvider);
         unawaited(_speakAssistantReplyIfNeeded());
+        // 若无 TTS（或 TTS 极短暂），也确保 STT 能恢复
+        // TTS 路径：setStartHandler 停 STT → setCompletionHandler 重启
+        // 无 TTS 路径：直接重启
+        Future<void>.delayed(const Duration(milliseconds: 200), _maybeStartListening);
+      }
+    });
+
+    // saveTurn 落库确认：语音端到端每轮结束后写库成功，刷新会话列表
+    _socket!.on('turnSaved', (data) {
+      if (mounted) {
+        ref.invalidate(conversationsProvider);
       }
     });
 
@@ -858,15 +1285,34 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     final gradEnd = agent != null
         ? _hexToColor(agent.gradientEnd)
         : StarpathColors.brandBlue;
-    // 有消息 && 不在语音模式 → 显示消息列表；其余情况显示沉浸视图
-    final hasMessages =
-        (_messages.isNotEmpty || _isThinking) && !_voiceBarWithMessages;
+
+    // ── text 模式 / 语音页内联全屏文字：同一 State，共享 Socket 与消息列表 ─────
+    if (_showFullTextChat) {
+      return _buildTextModeScaffold(agent, gradStart, gradEnd);
+    }
+
+    // ── voice 模式：沉浸语音布局 ─────────────────────────────────────────
     final showTextInputBar =
         (_messages.isNotEmpty || _isThinking)
             ? !_voiceBarWithMessages
             : _showTextInput;
 
-    return Scaffold(
+    // 是否处于"键盘/文字输入"模式（此时返回键应退回语音模式，而非退出页面）
+    final isInTextMode2 = _showTextInput || !_voiceBarWithMessages;
+
+    return PopScope(
+      canPop: !isInTextMode2,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        // 拦截返回：退出文字模式，回到语音沉浸界面
+        FocusScope.of(context).unfocus();
+        setState(() {
+          _showTextInput = false;
+          _voiceBarWithMessages = true;
+        });
+        if (!_useVolcSdk && _sttAvailable) _maybeStartListening();
+      },
+      child: Scaffold(
       backgroundColor: _kChatPageBackground,
       resizeToAvoidBottomInset: true,
       body: Stack(
@@ -875,7 +1321,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
           const Positioned.fill(
               child: ColoredBox(color: _kChatPageBackground)),
           // ── 角色视频：黑底抠 alpha + ShaderMask 滤色与渐变 shader 混合 ───
-          if (_videoReady)
+          if (_kShowChatHeroVideo && _videoReady)
             Positioned.fill(
               child: LayoutBuilder(
                 builder: (context, box) {
@@ -895,23 +1341,23 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                   final scaleW = box.maxWidth / videoSize.width;
                   final scaleH = box.maxHeight / videoSize.height;
                   final coverScale = scaleW > scaleH ? scaleW : scaleH;
-                  final scale = coverScale * _kChatHeroVideoScaleFactor;
-                  return ClipRect(
-                    child: OverflowBox(
-                      maxWidth: double.infinity,
-                      maxHeight: double.infinity,
-                      child: Transform.scale(
-                        scale: scale,
-                        child: SizedBox(
-                          width: videoSize.width,
-                          height: videoSize.height,
-                          child: ShaderMask(
-                            blendMode: BlendMode.screen,
-                            shaderCallback: _chatHeroScreenBlendShader,
-                            child: ColorFiltered(
-                              colorFilter: _kBlackRemovalFilter,
-                              child: VideoPlayer(ctrl),
-                            ),
+                  final scale = coverScale *
+                      _kChatHeroVideoScaleFactor *
+                      _kChatHeroVideoVoiceExtraScale;
+                  // 直接显示原始视频，不做任何颜色滤镜或抠像处理
+                  final Widget videoCore = VideoPlayer(ctrl);
+                  return Transform.translate(
+                    offset: const Offset(0, _kChatHeroVideoOffsetY),
+                    child: ClipRect(
+                      child: OverflowBox(
+                        maxWidth: double.infinity,
+                        maxHeight: double.infinity,
+                        child: Transform.scale(
+                          scale: scale,
+                          child: SizedBox(
+                            width: videoSize.width,
+                            height: videoSize.height,
+                            child: videoCore,
                           ),
                         ),
                       ),
@@ -920,13 +1366,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                 },
               ),
             ),
-          // ── 聊天时：全屏黑色蒙层盖住视频（不用 BackdropFilter 避免导航过渡残影）
-          if (hasMessages)
-            const Positioned.fill(
-              child: IgnorePointer(
-                child: ColoredBox(color: Color(0xCC000000)),
-              ),
-            ),
+          // 视频全程可见，不加遮罩
           // ── 页面内容 ──────────────────────────────────────────────────
           Column(
             children: [
@@ -941,7 +1381,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                       fit: StackFit.expand,
                       children: [
                         // 热区在下层：全宽条带，列表/沉浸内容在上层
-                        if (_videoReady)
+                        if (_kShowChatHeroVideo && _videoReady)
                           Positioned(
                             left: 0,
                             right: 0,
@@ -953,12 +1393,7 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                               child: const ColoredBox(color: Colors.transparent),
                             ),
                           ),
-                        Positioned.fill(
-                          child: hasMessages
-                              ? _buildChatBody(
-                                  agent, gradStart, gradEnd)
-                              : _buildImmersiveView(),
-                        ),
+                        _buildImmersiveView(),
                       ],
                     );
                   },
@@ -972,12 +1407,163 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
           ),
         ],
       ),
-    );
+      ), // Scaffold
+    ); // PopScope
   }
 
   // ── 自定义顶栏 ────────────────────────────────────────────────────────────
 
   /// 与 Spotlight 长卡片 [agentName] 一致；无 query 时再显示会话里的 Agent 名。
+  // ── 纯文字聊天模式 Scaffold ──────────────────────────────────────────────
+
+  Widget _buildTextModeScaffold(
+      AgentBrief? agent, Color gradStart, Color gradEnd) {
+    Future<void> leaveTextChat() async {
+      FocusScope.of(context).unfocus();
+      if (_inlineTextMode) {
+        setState(() => _inlineTextMode = false);
+        await _refreshMessagesFromServer();
+        if (_useVolcSdk && mounted && !_disposed) {
+          await _restartVolcDialogOnly();
+        }
+      } else {
+        Navigator.of(context).pop();
+      }
+    }
+
+    final scaffold = Scaffold(
+      backgroundColor: const Color(0xFF0F0A1A),
+      resizeToAvoidBottomInset: true,
+      body: Column(
+        children: [
+          // ── 顶栏 ──────────────────────────────────────────────────────
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 16, 8),
+              child: Row(
+                children: [
+                  // 返回：内联模式回到语音沉浸；独立文字页则 pop Route
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                        size: 20, color: Colors.white),
+                    onPressed: () => unawaited(leaveTextChat()),
+                  ),
+                  const SizedBox(width: 4),
+                  // 头像
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [gradStart, gradEnd],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        _topBarAgentEmoji(agent),
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _topBarAgentTitle(agent),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (_resolvedAgentId != null) ...[
+                    IconButton(
+                      tooltip: '调整性格',
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        unawaited(_openPartnerPersonalityEditor());
+                      },
+                      icon: const Icon(Icons.psychology_alt_rounded,
+                          color: Colors.white, size: 22),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          // ── 消息列表 ───────────────────────────────────────────────────
+          Expanded(
+            child: _messages.isEmpty && !_isThinking
+                ? Center(
+                    child: Text(
+                      '发送消息开始对话',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.3), fontSize: 15),
+                    ),
+                  )
+                : _buildChatBody(agent, gradStart, gradEnd),
+          ),
+          // ── 输入栏 ─────────────────────────────────────────────────────
+          _buildInputBar(gradStart, gradEnd),
+        ],
+      ),
+    );
+
+    if (_inlineTextMode) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          unawaited(leaveTextChat());
+        },
+        child: scaffold,
+      );
+    }
+    return scaffold;
+  }
+
+  /// 从全屏文字返回语音后重新拉起豆包会话（[stopDialog] 后需显式 start）
+  Future<void> _restartVolcDialogOnly() async {
+    if (!_useVolcSdk || _disposed || !mounted) return;
+    if (_volcAppId.isEmpty || _volcAppToken.isEmpty) return;
+    final ok = await _voiceBridge.startDialog(VoiceDialogConfig(
+      appId: _volcAppId,
+      appKey: _volcAppKey,
+      appToken: _volcAppToken,
+      dialogModel: _volcDialogModel,
+      ttsSpeaker: _volcTtsSpeaker,
+      enableAec: _volcEnableAec,
+    ));
+    if (!ok && mounted) {
+      debugPrint('[VolcVoice] _restartVolcDialogOnly: startDialog failed');
+    }
+  }
+
+  /// 内联文字模式打开后稍等 saveTurn 落库再拉 REST，避免列表缺最后一轮语音
+  Future<void> _syncMessagesAfterOpeningInlineText() async {
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted || !_inlineTextMode) return;
+    await _refreshMessagesFromServer();
+  }
+
+  /// 取 agent emoji 头像
+  String _topBarAgentEmoji(AgentBrief? agent) {
+    if (agent == null) return '🤖';
+    final id = agent.id;
+    const emojis = ['🌟', '💫', '✨', '🎯', '🚀', '🎨', '🎵', '🌈'];
+    final digits = RegExp(r'\d+').allMatches(id);
+    if (digits.isNotEmpty) {
+      final n = int.parse(digits.last.group(0)!);
+      return emojis[n % emojis.length];
+    }
+    return '🤖';
+  }
+
   String _topBarAgentTitle(AgentBrief? agent) {
     final fromCard = widget.agentName?.trim();
     if (fromCard != null && fromCard.isNotEmpty) return fromCard;
@@ -1051,6 +1637,31 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
               ],
             ),
           ),
+          if (_resolvedAgentId != null) ...[
+            Tooltip(
+              message: '调整性格',
+              child: GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  unawaited(_openPartnerPersonalityEditor());
+                },
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: StarpathColors.surfaceContainerHigh
+                        .withValues(alpha: 0.75),
+                    border: Border.all(
+                        color: StarpathColors.outlineVariant, width: 0.8),
+                  ),
+                  child: const Icon(Icons.psychology_alt_rounded,
+                      size: 20, color: StarpathColors.onSurface),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           // 右侧操作按钮：设定主伙伴 / 更换伙伴
           GestureDetector(
             onTap: () {
@@ -1105,6 +1716,24 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                 ),
               ),
               const SizedBox(height: 16),
+              if (_resolvedAgentId != null) ...[
+                _PartnerOptionTile(
+                  icon: Icons.psychology_alt_rounded,
+                  iconColor: StarpathColors.secondary,
+                  label: '调整性格与对话',
+                  subtitle: '性格标签、人设与说话风格',
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    unawaited(_openPartnerPersonalityEditor());
+                  },
+                ),
+                Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: StarpathColors.outlineVariant.withValues(alpha: 0.3),
+                ),
+              ],
               _PartnerOptionTile(
                 icon: Icons.star_rounded,
                 iconColor: const Color(0xFFFFD700),
@@ -1204,102 +1833,70 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     );
   }
 
-  // ── 沉浸式欢迎视图（无历史消息时） ──────────────────────────────────────
+  // ── 沉浸式欢迎区（标题 + 说明） ─────────────────────────────────────────
 
-  Widget _buildImmersiveView() {
-    return Stack(
-      children: [
-        // ── 问候文字（左上区域） ─────────────────────────────────────────
-        Positioned(
-          top: 16,
-          left: 24,
-          right: 120,
+  String _immersiveWelcomeSubtitle() {
+    return switch (_connUi) {
+      _ChatConnUi.live =>
+        '我已经准备好陪你啦，有什么想聊的尽管说～',
+      _ChatConnUi.demo =>
+        '当前未连上实时服务（演示模式），界面可先体验；完整对话需启动后端。',
+      _ChatConnUi.connecting => '正在连接中，请稍候...',
+    };
+  }
+
+  Widget _buildImmersiveWelcomeColumn() {
+    final screenW = MediaQuery.sizeOf(context).width;
+    final subtitle = _immersiveWelcomeSubtitle();
+    final titleStyle = Theme.of(context).textTheme.headlineLarge?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: StarpathColors.onSurface,
+          height: 1.1,
+        );
+    final bodyStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: StarpathColors.onSurfaceVariant,
+          height: 1.35,
+        );
+
+    // 顶栏下方、偏上区域（与角色立绘错开），勿垂直居中压在角色上
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: math.max(200, screenW - 32)),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Text(
                 '嗨，你好！',
-                style:
-                    Theme.of(context).textTheme.headlineLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: StarpathColors.onSurface,
-                          height: 1.1,
-                        ),
-              )
-                  .animate(delay: 100.ms)
-                  .fadeIn(duration: 350.ms)
-                  .slideY(begin: 0.15, curve: Curves.easeOut),
-              const SizedBox(height: 10),
+                style: titleStyle,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
               Text(
-                switch (_connUi) {
-                  _ChatConnUi.live =>
-                    '我已经准备好陪你啦，\n有什么想聊的尽管说～',
-                  _ChatConnUi.demo =>
-                    '当前未连上实时服务（演示模式），\n界面可先体验；完整对话需启动后端。',
-                  _ChatConnUi.connecting => '正在连接中，请稍候...',
-                },
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: StarpathColors.onSurfaceVariant,
-                      height: 1.6,
-                    ),
-              )
-                  .animate(delay: 220.ms)
-                  .fadeIn(duration: 350.ms)
-                  .slideY(begin: 0.15, curve: Curves.easeOut),
+                subtitle,
+                style: bodyStyle,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
 
-        // ── 状态胶囊（右上角） ───────────────────────────────────────────
-        Positioned(
-          top: 20,
-          right: 20,
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color:
-                  StarpathColors.surfaceContainer.withValues(alpha: 0.88),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: StarpathColors.outlineVariant, width: 0.8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: switch (_connUi) {
-                      _ChatConnUi.live => StarpathColors.success,
-                      _ChatConnUi.demo => StarpathColors.warning,
-                      _ChatConnUi.connecting =>
-                        StarpathColors.textTertiary,
-                    },
-                  ),
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  switch (_connUi) {
-                    _ChatConnUi.live => '智能对话中',
-                    _ChatConnUi.demo => '演示模式',
-                    _ChatConnUi.connecting => '连接中...',
-                  },
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: StarpathColors.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          )
-              .animate(delay: 300.ms)
-              .fadeIn(duration: 300.ms)
-              .slideX(begin: 0.2, curve: Curves.easeOut),
-        ),
-      ],
+  /// 标题 + 简短说明（语音沉浸主页）
+  Widget _buildImmersiveView() {
+    return Positioned(
+      top: _kImmersiveContentTop,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: _buildImmersiveWelcomeColumn(),
     );
   }
 
@@ -1308,30 +1905,255 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   Widget _buildVoiceControls(Color gradStart, Color gradEnd) {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final listening = _stt.isListening;
-    final hint = !_sttAvailable
-        ? '当前设备不支持语音识别...'
-        : (listening ? '正在聆听...' : '准备就绪，请直接说话...');
+    final inCooldown = _sttCooldownUntil != null &&
+        DateTime.now().isBefore(_sttCooldownUntil!);
+
+    // ── STT 不可用时降级为「打字 + TTS 朗读」模式 ────────────────────────────
+    // _sttAvailable 为 false 的原因不限于模拟器：权限被拒、系统语音服务不可用等也会失败。
+    // flutter_tts 仍可用，故用文字输入替代连续聆听。
+    final bool useTypeToSpeak = !_useVolcSdk && !_sttAvailable;
+
+    if (useTypeToSpeak) {
+      return Container(
+        padding: EdgeInsets.only(bottom: bottom + 16, top: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_ttsPlaying)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.volume_up_rounded,
+                        size: 16, color: gradStart.withValues(alpha: 0.8)),
+                    const SizedBox(width: 6),
+                    Text('AI 正在播报...',
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: gradStart.withValues(alpha: 0.8))),
+                  ],
+                ),
+              )
+            else
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                child: Text(
+                  '语音听写未就绪（模拟器常不支持；真机请检查麦克风与语音识别权限）。'
+                  '请在此输入文字，AI 会以语音播报回答。',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: StarpathColors.textTertiary),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: StarpathColors.surface
+                            .withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                            color: StarpathColors.outlineVariant
+                                .withValues(alpha: 0.4)),
+                      ),
+                      child: TextField(
+                        controller: _messageController,
+                        style: const TextStyle(
+                            color: StarpathColors.onSurface, fontSize: 15),
+                        decoration: InputDecoration(
+                          hintText: '输入想说的话...',
+                          hintStyle: TextStyle(
+                              color: StarpathColors.textTertiary,
+                              fontSize: 15),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (v) {
+                          final text = v.trim();
+                          if (text.isNotEmpty) {
+                            _sendVoiceMessage(text,
+                                speakAssistantReply: true);
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _messageController,
+                    builder: (_, val, __) {
+                      final canSend =
+                          val.text.trim().isNotEmpty && !_isThinking;
+                      return GestureDetector(
+                        onTap: canSend
+                            ? () {
+                                final text =
+                                    _messageController.text.trim();
+                                if (text.isNotEmpty) {
+                                  _sendVoiceMessage(text,
+                                      speakAssistantReply: true);
+                                }
+                              }
+                            : null,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: canSend
+                                ? LinearGradient(
+                                    colors: [gradStart, gradEnd])
+                                : null,
+                            color: canSend
+                                ? null
+                                : StarpathColors.outlineVariant
+                                    .withValues(alpha: 0.3),
+                          ),
+                          child: Icon(
+                            _isThinking
+                                ? Icons.hourglass_empty_rounded
+                                : Icons.send_rounded,
+                            color: canSend
+                                ? Colors.white
+                                : StarpathColors.textTertiary,
+                            size: 20,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            _VoiceButton(
+              icon: Icons.close_rounded,
+              onTap: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── 状态提示文案 ─────────────────────────────────────────────
+    final String hint;
+    if (_useVolcSdk) {
+      // 豆包端到端语音 SDK 模式
+      if (_volcConnected == null) {
+        hint = '豆包语音连接中...';
+      } else if (_volcConnected == true) {
+        hint = _sdkAiSpeaking ? 'AI 正在说话...' : '请直接说话，AI 正在聆听';
+      } else {
+        // 连接失败
+        if (_volcLastError != null && _volcLastError!.isNotEmpty) {
+          hint = '豆包连接失败：$_volcLastError';
+        } else {
+          hint = '语音服务连接失败，请检查网络与 API Key';
+        }
+      }
+    } else {
+      // 系统 STT 模式
+      hint = inCooldown
+          ? '未检测到语音，稍候自动继续聆听（也可点麦克风重试）'
+          : (listening ? '正在聆听...' : '准备就绪，请直接说话...');
+    }
+
+    final showListenCard = _voiceTranscript.isEmpty &&
+        ((_useVolcSdk &&
+                _volcConnected != false &&
+                !(_volcConnected == true && _sdkAiSpeaking)) ||
+            (!_useVolcSdk && _sttAvailable && !inCooldown));
 
     return Container(
       padding: EdgeInsets.only(bottom: bottom + 24, top: 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 8),
-            child: Text(
-              _voiceTranscript.isEmpty ? hint : _voiceTranscript,
-              style: TextStyle(
-                color: _voiceTranscript.isEmpty
-                    ? (listening
-                        ? gradStart.withValues(alpha: 0.88)
-                        : StarpathColors.textTertiary)
-                    : StarpathColors.onSurface,
-                fontSize: 15,
-                height: 1.45,
+          if (_shouldShowVoiceAssistantSubtitle()) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '语音播报',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: StarpathColors.textTertiary,
+                      letterSpacing: 0.3,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _voiceAssistantSubtitleLive(),
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: StarpathColors.onSurface,
+                      fontSize: 14,
+                      height: 1.45,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_ttsPlaying)
+                        TextButton.icon(
+                          onPressed: () => unawaited(_stopAssistantSpeech()),
+                          icon: const Icon(Icons.stop_circle_outlined, size: 20),
+                          label: const Text('停止播报'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: StarpathColors.onSurface,
+                          ),
+                        )
+                      else
+                        TextButton.icon(
+                          onPressed: _ttsReady && !_isThinking
+                              ? () => unawaited(_replayLastAssistantTts())
+                              : null,
+                          icon: const Icon(Icons.volume_up_rounded, size: 20),
+                          label: const Text('收听回复'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: gradStart,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
               ),
-              textAlign: TextAlign.center,
             ),
+          ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: showListenCard
+                ? _VoiceListenHintCard(hint: hint)
+                : Text(
+                    _voiceTranscript.isEmpty ? hint : _voiceTranscript,
+                    style: TextStyle(
+                      color: _voiceTranscript.isEmpty
+                          ? (listening
+                              ? gradStart.withValues(alpha: 0.88)
+                              : StarpathColors.textTertiary)
+                          : StarpathColors.onSurface,
+                      fontSize: 15,
+                      height: 1.45,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
           ),
           const SizedBox(height: 6),
           Row(
@@ -1357,27 +2179,24 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                   } else if (!_voiceBarWithMessages) {
                     FocusScope.of(context).unfocus();
                     setState(() => _voiceBarWithMessages = true);
+                    if (!_useVolcSdk && _sttAvailable) _userRetryListening();
+                  } else if (!_useVolcSdk && _sttAvailable) {
+                    _userRetryListening();
                   }
                 },
               ),
               const SizedBox(width: 20),
               _VoiceButton(
                 icon: Icons.keyboard_rounded,
-                onTap: () {
-                  final msgs = _messages.isNotEmpty || _isThinking;
-                  setState(() {
-                    if (msgs) {
-                      _voiceBarWithMessages = false;
-                    } else {
-                      _showTextInput = true;
-                    }
-                  });
-                  _stt.stop();
-                  if (msgs) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) _chatInputFocusNode.requestFocus();
-                    });
+                onTap: () async {
+                  HapticFeedback.selectionClick();
+                  // 先停豆包引擎，避免与文字输入 / WebSocket 并发抢麦克风与音频焦点
+                  if (_useVolcSdk) {
+                    await _voiceBridge.stopDialog();
                   }
+                  if (!mounted) return;
+                  setState(() => _inlineTextMode = true);
+                  unawaited(_syncMessagesAfterOpeningInlineText());
                 },
               ),
             ],
@@ -1444,14 +2263,16 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
                         content: msg.content,
                         textColor: Colors.white,
                       )
-                    : Text(
-                        msg.content,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          height: 1.6,
-                        ),
-                      ),
+                    : isUser
+                        ? Text(
+                            msg.content,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              height: 1.6,
+                            ),
+                          )
+                        : ChatAssistantMarkdown(data: msg.content),
               ),
             ),
             if (isUser) const SizedBox(width: 8),
@@ -1626,21 +2447,23 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
     final showQuickSuggests = _showTextInput || _messages.isNotEmpty;
     final hasMsgs = _messages.isNotEmpty || _isThinking;
 
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 8,
-            top: 12,
-            bottom: MediaQuery.of(context).padding.bottom + 12,
+    // Android 上 BackdropFilter 配合 OpenGL ES 模拟器会有渲染异常；跳过毛玻璃只保留底色。
+    final bool useBlur =
+        kIsWeb || defaultTargetPlatform != TargetPlatform.android;
+
+    final Widget inputBody = Container(
+          width: double.infinity,
+          padding: EdgeInsets.fromLTRB(
+            12,
+            12,
+            12,
+            MediaQuery.of(context).padding.bottom + 12,
           ),
-          decoration: BoxDecoration(
-            color: StarpathColors.surfaceBright.withValues(alpha: 0.38),
-            border: const Border(
+          decoration: const BoxDecoration(
+            color: Colors.transparent,
+            border: Border(
               top: BorderSide(
-                color: StarpathColors.divider,
+                color: Color(0x33CC97FF),
                 width: 0.8,
               ),
             ),
@@ -1661,44 +2484,50 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  // 沉浸模式下显示「收起键盘」返回三按钮
-                  if (_showTextInput && _messages.isEmpty) ...[
-                    GestureDetector(
-                      onTap: () {
-                        FocusScope.of(context).unfocus();
-                        setState(() => _showTextInput = false);
-                      },
-                      child: Container(
-                        width: 38,
-                        height: 38,
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: StarpathColors.surfaceContainerHigh
-                              .withValues(alpha: 0.8),
-                          border: Border.all(
-                              color: StarpathColors.outlineVariant, width: 0.8),
+                  // text 独立页面模式：不显示「收起键盘」和「切回语音」麦克风按钮
+                  if (!_showFullTextChat) ...[
+                    // 沉浸模式下显示「收起键盘」返回三按钮
+                    if (_showTextInput && _messages.isEmpty) ...[
+                      GestureDetector(
+                        onTap: () {
+                          FocusScope.of(context).unfocus();
+                          setState(() => _showTextInput = false);
+                          _maybeStartListening();
+                        },
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: StarpathColors.surfaceContainerHigh
+                                .withValues(alpha: 0.8),
+                            border: Border.all(
+                                color: StarpathColors.outlineVariant,
+                                width: 0.8),
+                          ),
+                          child: const Icon(Icons.keyboard_hide_rounded,
+                              size: 18,
+                              color: StarpathColors.onSurfaceVariant),
                         ),
-                        child: const Icon(Icons.keyboard_hide_rounded,
-                            size: 18, color: StarpathColors.onSurfaceVariant),
+                      ),
+                    ],
+                    // ── 麦克风：有消息时点击一次切回底部语音界面 ─────────────────
+                    GestureDetector(
+                      onTap: hasMsgs
+                          ? () {
+                              FocusScope.of(context).unfocus();
+                              setState(() => _voiceBarWithMessages = true);
+                            }
+                          : null,
+                      behavior: HitTestBehavior.opaque,
+                      child: _MicButton(
+                        available: _sttAvailable,
+                        listening: _stt.isListening,
                       ),
                     ),
+                    const SizedBox(width: 8),
                   ],
-                  // ── 麦克风：有消息时点击一次切回底部语音界面 ───────────────────
-                  GestureDetector(
-                    onTap: hasMsgs
-                        ? () {
-                            FocusScope.of(context).unfocus();
-                            setState(() => _voiceBarWithMessages = true);
-                          }
-                        : null,
-                    behavior: HitTestBehavior.opaque,
-                    child: _MicButton(
-                      available: _sttAvailable,
-                      listening: _stt.isListening,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                   Expanded(
                     child: _FocusInputField(
                       controller: _messageController,
@@ -1720,7 +2549,13 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
               ),
             ],
           ),
-        ),
+        );
+
+    if (!useBlur) return inputBody;
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: inputBody,
       ),
     );
   }
@@ -1810,10 +2645,128 @@ class _OnlineDotState extends State<_OnlineDot>
   }
 }
 
+// ── 聆听声波条（多竖条正弦叠加，模拟语音能量）────────────────────────────────
+
+class _VoiceWaveBars extends StatefulWidget {
+  final Color color;
+
+  const _VoiceWaveBars({required this.color});
+
+  @override
+  State<_VoiceWaveBars> createState() => _VoiceWaveBarsState();
+}
+
+class _VoiceWaveBarsState extends State<_VoiceWaveBars>
+    with SingleTickerProviderStateMixin {
+  static const int _barCount = 11;
+  static const double _barWidth = 3.2;
+  static const double _gap = 2.4;
+  static const double _hMin = 4;
+  static const double _hMax = 28;
+
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// 每条柱独立相位 + 双频正弦，避免机械齐跳
+  double _barHeight(int index, double t) {
+    final phase = index * 0.52;
+    final u = t * 2 * math.pi * 1.75;
+    final w1 = math.sin(u + phase);
+    final w2 = 0.42 * math.sin(u * 2.15 + phase * 1.3 + 0.8);
+    final mix = (w1 + w2 + 1.42) / 2.84;
+    return _hMin + (_hMax - _hMin) * mix.clamp(0.12, 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        final t = _ctrl.value;
+        return SizedBox(
+          height: _hMax + 8,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              for (var i = 0; i < _barCount; i++) ...[
+                if (i > 0) const SizedBox(width: _gap),
+                Container(
+                  width: _barWidth,
+                  height: _barHeight(i, t),
+                  decoration: BoxDecoration(
+                    color: widget.color.withValues(
+                      alpha: 0.55 + (i % 4) * 0.09,
+                    ),
+                    borderRadius:
+                        BorderRadius.circular(_barWidth * 0.5),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── 语音聆听提示（透明底 + 浅紫字 + 声波条）──────────────────────────────────
+
+class _VoiceListenHintCard extends StatelessWidget {
+  final String hint;
+
+  const _VoiceListenHintCard({required this.hint});
+
+  @override
+  Widget build(BuildContext context) {
+    const hintColor = StarpathColors.secondary;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _VoiceWaveBars(color: hintColor),
+            const SizedBox(height: 14),
+            Text(
+              hint,
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.45,
+                color: hintColor,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── 真实循环弹跳波浪点 ────────────────────────────────────────────────────────
 
 class _BouncingDots extends StatefulWidget {
   final List<Color> colors;
+
   const _BouncingDots({required this.colors});
 
   @override
@@ -1823,6 +2776,8 @@ class _BouncingDots extends StatefulWidget {
 class _BouncingDotsState extends State<_BouncingDots>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
+  // 动画对象在 initState 里创建一次，避免在 build() 里反复创建导致 listener 泄漏
+  late final List<Animation<double>> _anims;
 
   @override
   void initState() {
@@ -1831,6 +2786,16 @@ class _BouncingDotsState extends State<_BouncingDots>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+    _anims = List.generate(3, (i) {
+      final begin = i * 0.28;
+      final end = (begin + 0.50).clamp(0.0, 1.0);
+      return Tween<double>(begin: 0, end: -7).animate(
+        CurvedAnimation(
+          parent: _ctrl,
+          curve: Interval(begin, end, curve: Curves.easeInOut),
+        ),
+      );
+    });
   }
 
   @override
@@ -1841,33 +2806,30 @@ class _BouncingDotsState extends State<_BouncingDots>
 
   @override
   Widget build(BuildContext context) {
+    const sz = 7.0;
+    const gap = 6.0;
+    final dotFill = widget.colors[0].withValues(alpha: 0.75);
     return Row(
       mainAxisSize: MainAxisSize.min,
-      children: List.generate(3, (i) {
-        final begin = i * 0.28;
-        final end = (begin + 0.50).clamp(0.0, 1.0);
-        final anim = Tween<double>(begin: 0, end: -7).animate(
-          CurvedAnimation(
-            parent: _ctrl,
-            curve: Interval(begin, end, curve: Curves.easeInOut),
-          ),
-        );
-        return AnimatedBuilder(
-          animation: anim,
-          builder: (_, __) => Transform.translate(
-            offset: Offset(0, anim.value),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: widget.colors[0].withValues(alpha: 0.75),
+      children: [
+        for (var i = 0; i < 3; i++) ...[
+          if (i > 0) const SizedBox(width: gap),
+          AnimatedBuilder(
+            animation: _anims[i],
+            builder: (_, __) => Transform.translate(
+              offset: Offset(0, _anims[i].value),
+              child: Container(
+                width: sz,
+                height: sz,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: dotFill,
+                ),
               ),
             ),
           ),
-        );
-      }),
+        ],
+      ],
     );
   }
 }

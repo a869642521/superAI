@@ -1,13 +1,14 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:starpath/core/constants.dart';
 import 'package:starpath/features/auth/data/auth_provider.dart';
 import 'package:starpath/features/auth/presentation/login_page.dart';
 import 'package:starpath/features/onboarding/presentation/onboarding_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_create_page.dart';
 import 'package:starpath/features/agent_studio/presentation/agent_studio_page.dart';
 import 'package:starpath/features/agent_studio/presentation/partner_background_editor_page.dart';
+import 'package:starpath/features/agent_studio/presentation/partner_personality_editor_page.dart';
 import 'package:starpath/features/chat/presentation/chat_list_page.dart';
 import 'package:starpath/features/chat/presentation/chat_detail_page.dart';
 import 'package:starpath/features/chat/presentation/user_dm_detail_page.dart';
@@ -41,8 +42,7 @@ GoRouter createRouter(WidgetRef ref) {
       final isLoginRoute = state.matchedLocation == '/login';
       final isOnboardingRoute = state.matchedLocation == '/onboarding';
 
-      // Web 预览：跳过登录与引导，直接进入主页
-      if (kIsWeb) {
+      if (AppConstants.skipAuthForPreview) {
         if (isLoginRoute || isOnboardingRoute) {
           return '/discovery';
         }
@@ -130,6 +130,14 @@ GoRouter createRouter(WidgetRef ref) {
         path: '/agents/create',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const AgentCreatePage(),
+      ),
+      GoRoute(
+        path: '/agents/:agentId/personality',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final agentId = state.pathParameters['agentId']!;
+          return PartnerPersonalityEditorPage(agentId: agentId);
+        },
       ),
       GoRoute(
         path: '/agents/background-editor',

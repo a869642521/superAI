@@ -21,9 +21,10 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
 
-  const port = process.env.PORT || 3000;
-  await app.listen(port);
-  console.log(`Starpath server running on port ${port}`);
+  const port = Number(process.env.PORT) || 3000;
+  // 显式绑定 0.0.0.0：模拟器 10.0.2.2、局域网真机、Docker 端口映射均可连入
+  await app.listen(port, '0.0.0.0');
+  console.log(`Starpath server running on http://0.0.0.0:${port}`);
 }
 
 bootstrap();
