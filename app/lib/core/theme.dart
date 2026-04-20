@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -238,25 +239,51 @@ abstract final class StarpathJuicyIcons {
 class StarpathTheme {
   StarpathTheme._();
 
+  /// Plus Jakarta 等西文字体不含彩色 Emoji；iOS 上未设置 fallback 时常显示为空白。
+  static List<String> get emojiFontFallback {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return const ['Apple Color Emoji'];
+      case TargetPlatform.android:
+        return const ['Noto Color Emoji'];
+      case TargetPlatform.fuchsia:
+      case TargetPlatform.linux:
+      case TargetPlatform.windows:
+        return const [
+          'Noto Color Emoji',
+          'Segoe UI Emoji',
+          'Apple Color Emoji',
+        ];
+    }
+  }
+
+  static TextStyle _plusJakartaWithEmoji(TextStyle style) => style.copyWith(
+        fontFamilyFallback: emojiFontFallback,
+      );
+
   // Expose as darkTheme; lightTheme alias kept for backward compat
   static ThemeData get lightTheme => darkTheme;
 
   static ThemeData get darkTheme {
-    TextStyle _h(double size, FontWeight weight) =>
-        GoogleFonts.plusJakartaSans(
-          fontSize: size,
-          fontWeight: weight,
-          letterSpacing: -0.02 * size,
-          color: StarpathColors.onSurface,
-          height: 1.2,
+    TextStyle _h(double size, FontWeight weight) => _plusJakartaWithEmoji(
+          GoogleFonts.plusJakartaSans(
+            fontSize: size,
+            fontWeight: weight,
+            letterSpacing: -0.02 * size,
+            color: StarpathColors.onSurface,
+            height: 1.2,
+          ),
         );
 
     TextStyle _b(double size, FontWeight weight, Color color) =>
-        GoogleFonts.plusJakartaSans(
-          fontSize: size,
-          fontWeight: weight,
-          color: color,
-          height: 1.55,
+        _plusJakartaWithEmoji(
+          GoogleFonts.plusJakartaSans(
+            fontSize: size,
+            fontWeight: weight,
+            color: color,
+            height: 1.55,
+          ),
         );
 
     return ThemeData(
@@ -290,11 +317,13 @@ class StarpathTheme {
         elevation: 0,
         centerTitle: true,
         surfaceTintColor: Colors.transparent,
-        titleTextStyle: GoogleFonts.plusJakartaSans(
-          color: StarpathColors.onSurface,
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
-          letterSpacing: -0.34,
+        titleTextStyle: _plusJakartaWithEmoji(
+          GoogleFonts.plusJakartaSans(
+            color: StarpathColors.onSurface,
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.34,
+          ),
         ),
         iconTheme: const IconThemeData(
             color: StarpathColors.onSurfaceVariant),
@@ -333,13 +362,17 @@ class StarpathTheme {
           borderSide:
               const BorderSide(color: StarpathColors.error, width: 2),
         ),
-        hintStyle: GoogleFonts.plusJakartaSans(
-          color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.5),
-          fontSize: 15,
+        hintStyle: _plusJakartaWithEmoji(
+          GoogleFonts.plusJakartaSans(
+            color: StarpathColors.onSurfaceVariant.withValues(alpha: 0.5),
+            fontSize: 15,
+          ),
         ),
         prefixIconColor: StarpathColors.onSurfaceVariant,
-        errorStyle:
-            GoogleFonts.plusJakartaSans(color: StarpathColors.error, fontSize: 12),
+        errorStyle: _plusJakartaWithEmoji(
+          GoogleFonts.plusJakartaSans(
+              color: StarpathColors.error, fontSize: 12),
+        ),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       ),
@@ -362,15 +395,19 @@ class StarpathTheme {
             StarpathColors.primary.withValues(alpha: 0.15),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return GoogleFonts.plusJakartaSans(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: StarpathColors.primary,
+            return _plusJakartaWithEmoji(
+              GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: StarpathColors.primary,
+              ),
             );
           }
-          return GoogleFonts.plusJakartaSans(
-            fontSize: 11,
-            color: StarpathColors.onSurfaceVariant,
+          return _plusJakartaWithEmoji(
+            GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              color: StarpathColors.onSurfaceVariant,
+            ),
           );
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {

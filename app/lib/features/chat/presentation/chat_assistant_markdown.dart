@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:starpath/core/theme.dart';
 
 /// 伙伴气泡内 Markdown（浅色文字，适配紫底气泡）
 class ChatAssistantMarkdown extends StatelessWidget {
@@ -18,6 +19,7 @@ class ChatAssistantMarkdown extends StatelessWidget {
       color: textColor,
       fontSize: 15,
       height: 1.6,
+      fontFamilyFallback: StarpathTheme.emojiFontFallback,
     );
     final dim = textColor.withValues(alpha: 0.85);
 
@@ -44,6 +46,7 @@ class ChatAssistantMarkdown extends StatelessWidget {
         code: base.copyWith(
           backgroundColor: Colors.black.withValues(alpha: 0.25),
           fontFamily: 'monospace',
+          fontFamilyFallback: StarpathTheme.emojiFontFallback,
           fontSize: 13,
         ),
         codeblockDecoration: BoxDecoration(
