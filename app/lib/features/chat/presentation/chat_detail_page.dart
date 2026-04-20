@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -684,10 +685,23 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
   // ── 火山引擎 SDK 实时对话 ────────────────────────────────────────────────────
 
   Future<void> _initVolcVoice() async {
+    // iOS 上严禁在 Volc E2E 路线里同时启 speech_to_text：
+    // 两者都会抢 AVAudioSession / SFSpeechRecognizer，
+    // 直接报 kAFAssistantErrorDomain Code=1101（"Ignoring subsequent local speech recording error"）。
+    final bool allowSttFallback = !Platform.isIOS;
+
     if (_volcAppId.isEmpty || _volcAppToken.isEmpty) {
-      debugPrint('[VolcVoice] 缺少 VOLC_APP_ID 或 VOLC_APP_TOKEN，回退 STT+TTS');
-      await _initStt();
-      await _initTts();
+      debugPrint('[VolcVoice] 缺少 VOLC_APP_ID 或 VOLC_APP_TOKEN');
+      if (allowSttFallback) {
+        await _initStt();
+        await _initTts();
+      } else {
+        _safeSetState(() {
+          _volcConnected = false;
+          _volcLastError =
+              '未读到 VOLC_APP_ID / VOLC_APP_TOKEN（请用 ./ios-device.sh 启动，而不是直接 flutter run）';
+        });
+      }
       return;
     }
     debugPrint(
@@ -704,10 +718,17 @@ class _ChatDetailPageState extends ConsumerState<ChatDetailPage> {
       enableAec:   _volcEnableAec,
     ));
     if (!ok && mounted) {
-      debugPrint('[VolcVoice] startDialog failed, fallback to STT/TTS');
-      _safeSetState(() => _volcConnected = false);
-      await _initStt();
-      await _initTts();
+      debugPrint('[VolcVoice] startDialog failed'
+          '${allowSttFallback ? ', fallback to STT/TTS' : ''}');
+      _safeSetState(() {
+        _volcConnected = false;
+        // 兜底：如果桥接的 error 事件没及时到达，给一条可见提示
+        _volcLastError ??= 'startDialog 返回 false（看 Xcode 控制台 [VoiceDialog] 日志）';
+      });
+      if (allowSttFallback) {
+        await _initStt();
+        await _initTts();
+      }
     }
   }
 
